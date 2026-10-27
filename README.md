@@ -86,10 +86,12 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 
 ## Giới hạn đã biết
 
-- OpenAPI đã bật Swagger CLI plugin và có response schema cho admin/catalog/auth; còn ~17 endpoint
-  (users, wallet, notifications, order history) chưa khai báo response, nên chưa sinh client tự động được.
-  Types của admin vẫn viết tay.
-- Một số tính năng FE phải giả lập vì v2 chưa có endpoint: hot search, filter giới tính/chữ cái/sở thích,
-  release pending credit, favorite games, feedback detail.
+- OpenAPI đã bật Swagger CLI plugin và khai báo response cho gần như toàn bộ endpoint trả body; một số
+  endpoint 204 hoặc chưa gắn `@ApiResponse` (deposits, behavior, availability) vẫn chưa có schema. Types của
+  admin và client FE vẫn viết tay thay vì sinh từ spec.
+- Các tính năng FE từng phải giả lập đã có endpoint v2 và đã nối vào app: hot search, filter
+  giới tính/chữ cái/sở thích, release pending credit, favorite games (mới chỉ có API + danh sách
+  "được yêu thích", chưa có nút yêu thích trong UI), feedback detail.
+- Chưa có OTP/email thật: luồng đăng ký/quên mật khẩu vẫn xác thực bằng mã cố định trong seed.
 - API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`); BE vẫn chưa có
   ESLint, cả ba repo chưa cấu hình remote.
