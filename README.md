@@ -40,6 +40,12 @@ npm run dev:app    # Expo dev server, chạy ở terminal riêng
 
 Lần đầu chạy, API tự migrate và seed dữ liệu demo (`AUTO_MIGRATE=true`, `SEED_DEMO_DATA=true`).
 
+Hoặc chạy backend bằng Docker (API + PostgreSQL 17, không cần Node trên máy):
+
+```bash
+docker compose -f play-together-be/docker-compose.yml up --build
+```
+
 ### Tài khoản seed
 
 | Vai trò | Email | Mật khẩu |
@@ -80,8 +86,10 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 
 ## Giới hạn đã biết
 
-- OpenAPI của API chưa có response schema (chưa bật Swagger CLI plugin), nên chưa sinh client tự động được;
-  types của admin đang viết tay.
+- OpenAPI đã bật Swagger CLI plugin và có response schema cho admin/catalog/auth; còn ~17 endpoint
+  (users, wallet, notifications, order history) chưa khai báo response, nên chưa sinh client tự động được.
+  Types của admin vẫn viết tay.
 - Một số tính năng FE phải giả lập vì v2 chưa có endpoint: hot search, filter giới tính/chữ cái/sở thích,
   release pending credit, favorite games, feedback detail.
-- Chưa có Dockerfile/CI cho API, chưa có ESLint cho BE, cả ba repo chưa cấu hình remote.
+- API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`); BE vẫn chưa có
+  ESLint, cả ba repo chưa cấu hình remote.
