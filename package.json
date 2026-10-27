@@ -1,0 +1,25 @@
+{
+  "name": "play-together",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Workspace orchestrator for the Play Together capstone: Expo app, NestJS API and admin console.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "npm ci --prefix play-together-be && npm ci --prefix play-together-admin && npm ci --prefix play-together-fe",
+    "dev": "concurrently --kill-others-on-fail -n api,admin -c blue,magenta \"npm:dev:api\" \"npm:dev:admin\"",
+    "dev:api": "npm --prefix play-together-be run start:dev",
+    "dev:admin": "npm --prefix play-together-admin run dev",
+    "dev:app": "npm --prefix play-together-fe run start",
+    "build": "npm --prefix play-together-be run build && npm --prefix play-together-admin run build",
+    "typecheck": "npm --prefix play-together-be run typecheck && npm --prefix play-together-fe run typecheck && npm --prefix play-together-admin run typecheck",
+    "lint": "npm --prefix play-together-fe run lint && npm --prefix play-together-admin run lint",
+    "check": "npm run typecheck && npm run lint",
+    "db:seed": "npm --prefix play-together-be run db:seed",
+    "db:reset": "npm --prefix play-together-be run db:reset"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

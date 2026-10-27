@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.env
+.env.*
+!.env.example
+
+# Each app is an independent git repository.
+/play-together-be/
+/play-together-fe/
+/play-together-admin/
