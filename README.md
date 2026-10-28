@@ -62,7 +62,7 @@ docker compose -f play-together-be/docker-compose.yml up --build
 | `npm run dev:api` / `dev:admin` / `dev:app` | Chạy riêng từng app |
 | `npm run build` | Build API và admin |
 | `npm run typecheck` | `tsc --noEmit` / `tsc -b` cho cả ba app |
-| `npm run lint` | ESLint của FE + oxlint của admin (**BE chưa có ESLint**) |
+| `npm run lint` | ESLint của BE + FE, oxlint của admin |
 | `npm run check` | typecheck + lint |
 | `npm run db:seed` / `db:reset` | Seed lại / reset dữ liệu PGlite |
 
@@ -80,18 +80,21 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 
 - **Commit message**: Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`), mô tả *vì sao* thay đổi.
 - **Không commit** file `.env`; mỗi app có `.env.example` tương ứng.
-- **Hợp đồng API**: mọi thay đổi wire format phải sửa DTO ở `play-together-be` trước, rồi cập nhật
-  adapter (`play-together-fe/src/api/v2`) và types (`play-together-admin/src/api/types.ts`).
+- **Hợp đồng API**: mọi thay đổi wire format phải sửa DTO ở `play-together-be` trước, chạy
+  `npm run openapi:export` khi API đang chạy, rồi chạy `npm run api:generate` ở FE và admin.
+  Code sinh ra nằm trong `src/api/generated` (không sửa tay, được bỏ qua khi lint).
 - **Không sửa** `ios/` và `android/` bằng tay — chúng được sinh bởi Expo CNG, cấu hình nằm trong `app.json`.
 
 ## Giới hạn đã biết
 
-- OpenAPI đã bật Swagger CLI plugin và khai báo response cho gần như toàn bộ endpoint trả body; một số
-  endpoint 204 hoặc chưa gắn `@ApiResponse` (deposits, behavior, availability) vẫn chưa có schema. Types của
-  admin và client FE vẫn viết tay thay vì sinh từ spec.
+- OpenAPI đã bật Swagger CLI plugin; toàn bộ 134 operation có schema thành công có kiểu (204 dùng
+  `@ApiNoContentResponse`). FE và admin đã cấu hình Orval (`npm run api:generate`) đọc từ
+  `play-together-be/openapi.json`; code cũ vẫn dùng types viết tay, code mới nên dùng bản sinh ra.
 - Các tính năng FE từng phải giả lập đã có endpoint v2 và đã nối vào app: hot search, filter
-  giới tính/chữ cái/sở thích, release pending credit, favorite games (mới chỉ có API + danh sách
-  "được yêu thích", chưa có nút yêu thích trong UI), feedback detail.
-- Chưa có OTP/email thật: luồng đăng ký/quên mật khẩu vẫn xác thực bằng mã cố định trong seed.
-- API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`); BE vẫn chưa có
-  ESLint, cả ba repo chưa cấu hình remote.
+  giới tính/chữ cái/sở thích, release pending credit, feedback detail. Game yêu thích có màn hình
+  riêng (`/favorite-games`, vào từ tab Cá nhân) với nút bật/tắt và cập nhật lạc quan.
+- OTP/email đã chạy thật: đăng ký và quên mật khẩu gọi `/auth/otp/request` + `/auth/otp/verify`,
+  mã 6 số hạn 10 phút. Chưa cấu hình `SMTP_HOST` thì API ghi mã vào log và trả `devCode`
+  (ngoài production) — cần SMTP thật khi triển khai.
+- API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`) và ESLint
+  type-aware; cả ba repo chưa cấu hình remote.

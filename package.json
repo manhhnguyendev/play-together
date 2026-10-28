@@ -14,7 +14,7 @@
     "dev:app": "npm --prefix play-together-fe run start",
     "build": "npm --prefix play-together-be run build && npm --prefix play-together-admin run build",
     "typecheck": "npm --prefix play-together-be run typecheck && npm --prefix play-together-fe run typecheck && npm --prefix play-together-admin run typecheck",
-    "lint": "npm --prefix play-together-fe run lint && npm --prefix play-together-admin run lint",
+    "lint": "npm --prefix play-together-be run lint && npm --prefix play-together-fe run lint && npm --prefix play-together-admin run lint",
     "check": "npm run typecheck && npm run lint",
     "db:seed": "npm --prefix play-together-be run db:seed",
     "db:reset": "npm --prefix play-together-be run db:reset"
