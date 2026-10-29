@@ -28,6 +28,7 @@ Hai client đều nói chuyện với **một** API v2. FE giữ nguyên các en
 - npm (cả ba app đều dùng `package-lock.json`)
 - Không cần cài Postgres: mặc định API chạy PGlite với dữ liệu trong `play-together-be/.data/pgdata`.
   `docker-compose.yml` trong repo BE chỉ dùng khi muốn chuyển sang Postgres thật.
+- Docker Desktop (tuỳ chọn) nếu muốn chạy stack bằng container — xem mục Docker bên dưới.
 
 ## Chạy nhanh
 
@@ -46,11 +47,28 @@ dev mặc định nhưng **không** seed — khi đó chạy `npm run db:seed`.
 Hai client đọc URL API từ `.env` riêng (FE: `EXPO_PUBLIC_API_URL`, admin: `VITE_API_URL`); giá trị
 mặc định đã trỏ về `http://localhost:3000/api/v2` nên bước này là tuỳ chọn.
 
-Hoặc chạy backend bằng Docker (API + PostgreSQL 17, không cần Node trên máy):
+Hoặc dựng cả hệ thống bằng Docker (API + admin console + PostgreSQL 17, không cần Node trên máy):
 
 ```bash
-docker compose -f play-together-be/docker-compose.yml up --build
+cp .env.example .env      # PowerShell: Copy-Item .env.example .env
+npm run docker:up         # = docker compose up --build
 ```
+
+- Admin: <http://localhost:8080> · API: <http://localhost:3000/api/v2>
+- **Điều kiện**: bốn repo phải nằm cạnh nhau (`play-together/`, `play-together-be/`, `play-together-fe/`,
+  `play-together-admin/`). `docker-compose.yml` build trực tiếp từ thư mục của hai repo app, mà repo gốc
+  chỉ chứa tài liệu — code của ba app bị `.gitignore` và nằm ở repo riêng, nên clone lẻ repo gốc sẽ
+  không dựng được.
+- Seed dữ liệu demo sau lần chạy đầu: `docker compose exec api node dist/db/seed-cli.js`
+- App mobile **không** nằm trong compose (cần thiết bị/simulator hoặc Expo Go): chạy `npm run dev:app`
+  và trỏ `EXPO_PUBLIC_API_URL` về IP LAN của máy, cổng 3000.
+- `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` bắt buộc có trong `.env` (compose dừng nếu thiếu);
+  `SMTP_*` để trống thì API ghi mã OTP vào log thay vì gửi mail.
+- Chỉ cần API + Postgres: `docker compose -f play-together-be/docker-compose.yml up --build`.
+
+Admin được build với `VITE_API_URL=/api/v2` và nginx trong container proxy `/api/` sang service `api`,
+nên trình duyệt gọi cùng origin và không vướng CORS. Muốn trỏ sang API khác thì đổi `ADMIN_API_URL`
+trong `.env` rồi build lại (`docker compose build admin`).
 
 ### Tài khoản seed
 
@@ -72,6 +90,7 @@ docker compose -f play-together-be/docker-compose.yml up --build
 | `npm run lint` | ESLint của BE + FE, oxlint của admin |
 | `npm run check` | typecheck + lint |
 | `npm run db:seed` / `db:reset` | Seed lại / reset dữ liệu PGlite |
+| `npm run docker:up` / `docker:down` | Dựng / dừng stack Docker (API + admin + Postgres) |
 
 Mỗi app vẫn có script riêng; xem README trong từng repo.
 
@@ -107,25 +126,37 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 - OTP/email đã chạy thật: đăng ký và quên mật khẩu gọi `/auth/otp/request` + `/auth/otp/verify`,
   mã 6 số hạn 10 phút. Chưa cấu hình `SMTP_HOST` thì API ghi mã vào log và trả `devCode`
   (ngoài production) — cần SMTP thật khi triển khai.
-- API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`) và ESLint
-  type-aware.
+- Docker: API image (2 stage, non-root, `HEALTHCHECK`) nằm ở `play-together-be/Dockerfile` và được CI
+  build + smoke test; admin có `play-together-admin/Dockerfile` (Vite build → nginx, proxy `/api/`);
+  `docker-compose.yml` ở repo gốc ghép ba service `db`/`api`/`admin`. FE không đóng gói container vì là
+  app mobile.
+- API có GitHub Actions CI (`.github/workflows/ci.yml` ở repo BE: lint, typecheck, unit + e2e, build
+  image và smoke test `/health`) và ESLint type-aware.
 
-## Đẩy lên GitHub
+## Mã nguồn trên GitHub
 
-Bốn repo độc lập nên mỗi repo có một remote riêng:
+Bốn repo công khai, cùng nằm dưới `github.com/manhhnguyendev` (chú ý hai chữ `h`):
+
+| Repo | URL |
+| --- | --- |
+| Gốc (tài liệu + compose) | <https://github.com/manhhnguyendev/play-together> |
+| API | <https://github.com/manhhnguyendev/play-together-be> |
+| App | <https://github.com/manhhnguyendev/play-together-fe> |
+| Admin | <https://github.com/manhhnguyendev/play-together-admin> |
+
+Vì code của ba app nằm ở repo riêng (repo gốc chỉ giữ tài liệu, `.gitignore` bỏ qua ba thư mục app),
+muốn dựng đầy đủ — kể cả `docker compose` — thì clone cả bốn repo cạnh nhau:
 
 ```bash
-# FE đang ở branch feat/api-v2; đổi tên trước khi push
-git -C play-together-fe branch -m feat/api-v2 main
-
-for repo in . play-together-be play-together-fe play-together-admin; do
-  git -C "$repo" remote add origin <url-của-repo-đó>
-  git -C "$repo" push -u origin main
-done
+mkdir play-together && cd play-together
+git clone https://github.com/manhhnguyendev/play-together.git .
+git clone https://github.com/manhhnguyendev/play-together-be.git
+git clone https://github.com/manhhnguyendev/play-together-fe.git
+git clone https://github.com/manhhnguyendev/play-together-admin.git
 ```
 
 Không push file `.env` (đã nằm trong `.gitignore` của từng repo); khi clone về máy mới thì copy
-`.env.example` như bước chạy nhanh ở trên.
+`.env.example` (repo gốc và từng app) như bước chạy nhanh ở trên.
 
 ## Giấy phép
 
