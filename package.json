@@ -2,6 +2,7 @@
   "name": "play-together",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Workspace orchestrator for the Play Together capstone: Expo app, NestJS API and admin console.",
   "engines": {
     "node": ">=20"

@@ -34,11 +34,17 @@ Hai client đều nói chuyện với **một** API v2. FE giữ nguyên các en
 ```bash
 npm install        # cài concurrently cho repo gốc
 npm run setup      # npm ci cho cả ba app
+cp play-together-be/.env.example play-together-be/.env   # bật migrate + seed demo
 npm run dev        # API (3000) + admin (5174)
 npm run dev:app    # Expo dev server, chạy ở terminal riêng
 ```
 
-Lần đầu chạy, API tự migrate và seed dữ liệu demo (`AUTO_MIGRATE=true`, `SEED_DEMO_DATA=true`).
+`play-together-be/.env.example` bật sẵn `AUTO_MIGRATE=true` và `SEED_DEMO_DATA=true`, nên lần chạy
+đầu API tự migrate và seed dữ liệu demo. Nếu bỏ qua bước copy `.env`, API vẫn khởi động với secret
+dev mặc định nhưng **không** seed — khi đó chạy `npm run db:seed`.
+
+Hai client đọc URL API từ `.env` riêng (FE: `EXPO_PUBLIC_API_URL`, admin: `VITE_API_URL`); giá trị
+mặc định đã trỏ về `http://localhost:3000/api/v2` nên bước này là tuỳ chọn.
 
 Hoặc chạy backend bằng Docker (API + PostgreSQL 17, không cần Node trên máy):
 
@@ -53,6 +59,7 @@ docker compose -f play-together-be/docker-compose.yml up --build
 | Admin | `admin@playtogether.local` | `Admin@12345` |
 | Tổ chức từ thiện | `charity@playtogether.local` | `Charity@12345` |
 | Người chơi demo | `demo.player1..6@playtogether.local` | `Demo@12345` |
+| Người thuê demo | `demo.hirer1..2@playtogether.local` | `Demo@12345` |
 
 ## Script gốc
 
@@ -79,7 +86,8 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 ## Quy ước
 
 - **Commit message**: Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`), mô tả *vì sao* thay đổi.
-- **Không commit** file `.env`; mỗi app có `.env.example` tương ứng.
+- **Không commit** file `.env`; cả ba app đều có `.env.example` (BE khai đủ biến, FE có thêm Client ID
+  Google tuỳ chọn, admin chỉ có URL API).
 - **Hợp đồng API**: mọi thay đổi wire format phải sửa DTO ở `play-together-be` trước, chạy
   `npm run openapi:export` khi API đang chạy, rồi chạy `npm run api:generate` ở FE và admin.
   Code sinh ra nằm trong `src/api/generated` (không sửa tay, được bỏ qua khi lint).
@@ -87,9 +95,12 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 
 ## Giới hạn đã biết
 
-- OpenAPI đã bật Swagger CLI plugin; toàn bộ 134 operation có schema thành công có kiểu (204 dùng
-  `@ApiNoContentResponse`). FE và admin đã cấu hình Orval (`npm run api:generate`) đọc từ
-  `play-together-be/openapi.json`; code cũ vẫn dùng types viết tay, code mới nên dùng bản sinh ra.
+- OpenAPI đã bật Swagger CLI plugin: **136 operation**, không operation nào thiếu response thành
+  công — 97 × `200`, 17 × `201`, 1 × `202` và 21 × `204` (`@ApiNoContentResponse`). `openapi.json`
+  là đầu vào cho Orval (`npm run api:generate`) ở cả hai client.
+- **Admin** gọi thẳng endpoint và model sinh ra trong `src/api/generated`. **FE** vẫn giữ lớp adapter
+  v2 viết tay ở `src/api/v2` (dịch wire type về model cũ); bản sinh ra trong `src/api/generated` đã
+  có sẵn nhưng chưa màn hình nào dùng, để dành cho bước chuyển đổi sau.
 - Các tính năng FE từng phải giả lập đã có endpoint v2 và đã nối vào app: hot search, filter
   giới tính/chữ cái/sở thích, release pending credit, feedback detail. Game yêu thích có màn hình
   riêng (`/favorite-games`, vào từ tab Cá nhân) với nút bật/tắt và cập nhật lạc quan.
@@ -97,4 +108,26 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
   mã 6 số hạn 10 phút. Chưa cấu hình `SMTP_HOST` thì API ghi mã vào log và trả `devCode`
   (ngoài production) — cần SMTP thật khi triển khai.
 - API đã có Dockerfile + GitHub Actions CI (`play-together-be/.github/workflows/ci.yml`) và ESLint
-  type-aware; cả ba repo chưa cấu hình remote.
+  type-aware.
+
+## Đẩy lên GitHub
+
+Bốn repo độc lập nên mỗi repo có một remote riêng:
+
+```bash
+# FE đang ở branch feat/api-v2; đổi tên trước khi push
+git -C play-together-fe branch -m feat/api-v2 main
+
+for repo in . play-together-be play-together-fe play-together-admin; do
+  git -C "$repo" remote add origin <url-của-repo-đó>
+  git -C "$repo" push -u origin main
+done
+```
+
+Không push file `.env` (đã nằm trong `.gitignore` của từng repo); khi clone về máy mới thì copy
+`.env.example` như bước chạy nhanh ở trên.
+
+## Giấy phép
+
+MIT — xem [`LICENSE`](./LICENSE) ở mỗi repo. Đây là đồ án sinh viên; game name, ảnh và nhãn hiệu
+trong dữ liệu seed thuộc về chủ sở hữu tương ứng, cần kiểm tra lại trước khi dùng thương mại.
