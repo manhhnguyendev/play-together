@@ -1745,6 +1745,185 @@ gate                          → FE `typecheck` 0, FE `lint` 0
   trong `useOngoingOrderGuard`, một của query `queryKeys.profile` mà chính màn đó dùng). Không hiện ra lỗi
   nào, chỉ thừa một round-trip; gộp được nhưng đụng tới thứ tự khởi động phiên nên để riêng.
 
+---
+
+## 25. Lưới chip sụp thành một ô mỗi dòng trên điện thoại — đã sửa
+
+Anh chụp màn "Chi tiết đánh giá" trên máy: sáu nút lọc (Tất cả, 5 sao … 1 sao) mỗi nút một dòng, nửa màn
+hình bên phải trống. Đây là lỗi hình học, không lỗi component.
+
+### Nguyên nhân
+
+`gridItemWidth()` chia chiều rộng cho số cột rồi làm tròn **lên** theo `PixelRatio`:
+
+| Khổ | DPR | ô tính ra | 2 ô + gap | container | kết quả |
+| --- | --- | --- | --- | --- | --- |
+| 375 | 3 | 167.5 → **167.667** | 343.33 | 343 | **tràn → wrap thành 1 ô/dòng** |
+| 411 | 3 | 185.5 → **185.667** | 379.33 | 379 | **tràn → 1 ô/dòng** |
+| 360 | 2 | 160 | 328 | 328 | vừa |
+| 390 | 3 | 175 | 358 | 358 | vừa |
+| 428 | 2 | 194 | 396 | 396 | vừa |
+
+Thừa **0,33 điểm ảnh** là đủ để flexbox đẩy ô thứ hai xuống dòng. đúng là lớp iPhone X/Pixel — vì những khổ
+chia hết thì không bị, nên lượt kiểm trên web và trên tablet trước đây không phát hiện ra.
+
+### Đã sửa
+
+1. `src/theme/responsive.ts:67` — `gridItemWidth` dùng `Math.floor` thay vì làm tròn lên; tám chỗ gọi nó
+   (lưới game, danh mục onboarding, game hot, thẻ giờ/kỹ năng…) tự hết tràn, thiết kế lưới giữ nguyên.
+2. Hai **hàng lọc** bỏ width cố định để chip ôm lấy nhãn: `ratings/[userId].tsx:85` và `transactions.tsx:88`.
+   Bộ lọc không phải lưới dữ liệu — ép mỗi ô rộng bằng nhau mới là thứ khiến nó trông hỏng.
+3. Nhân tiện: nhãn lọc `Donate` → `Quyên góp` (`transactions.tsx:30`) — chữ Anh còn sót trên đúng màn đang
+   xem; `type: 'Donate'` gửi lên API giữ nguyên vì đó là tham số, không phải chữ hiển thị.
+4. Quét luôn chữ `MOMO` in hoa trong câu hiển thị: 6 chỗ ở `transactions.tsx:34-35`, `deposit.tsx:78,82,90`,
+   `deposit-method.tsx:24`, `withdraw-method.tsx:27`, `withdraw.tsx:67` → `MoMo` cho khớp với note sổ tiền
+   phía API ("Nạp tiền qua MoMo"). `partnerCode: 'MOMO'` ở `src/api/v2/mappers.ts:504` **giữ nguyên** vì đó
+   là mã nhà cung cấp gửi đi, không phải chữ người dùng đọc.
+
+### Kiểm chứng
+
+```
+node mô phép chia (7 khổ, gap 8, min 150): overflow trước = 2/7, sau = 0/7
+đo thật trong iframe 375 px (cùng khổ máy anh):
+  /ratings        → 4 chip dòng 1 (y=68) + 2 chip dòng 2 (y=116), mỗi chip 66–74 px, bắt đầu từ lề 16
+  /transactions   → 3 + 3, chip cuối đọc "Quyên góp"
+  /search-history → lưới game 2 ô/dòng, hàng rộng nhất 338 px ≤ 343 px container
+gate: FE typecheck 0, FE lint 0
+```
+
+### Điều chưa chắc
+
+Phép đo trong trình duyệt chạy `devicePixelRatio = 1`, nên nó chứng minh **bố cục** (mỗi dòng mấy ô, có tràn
+không) chứ không tái hiện đúng con số 0,33 px gây tràn — số đó nằm ở bảng mô phỏng phía trên. Cần mắt anh
+trên máy xác nhận lần cuối, và đây cũng là lý do nên đổi `roundToNearestPixel` thành `floor` ở gốc thay vì
+chỉnh từng màn.
+
+---
+
+## 26. #118 — đã thực hiện: card "Ca trực" ở lại khi tắt chế độ người chơi
+
+### Vì sao trước đây tắt là mất hết
+
+`isPlayer` không phải cờ "rảnh/bận" mà là **chế độ hai chiều**: [orders.service.ts:109](../play-together-be/src/modules/orders/orders.service.ts) chặn tài khoản đang bật chế độ player đi thuê người khác,
+còn [:125](../play-together-be/src/modules/orders/orders.service.ts) chặn nhận thuê khi đang tắt. Vì vậy tab Nhà
+gate cả `PlayerDashboard` bằng `user?.isPlayer` — tắt là mất luôn thẻ, và muốn bật lại phải đi
+Cá nhân → Quản lý nhận thuê (hai màn).
+
+### Sau khi sửa
+
+| Trạng thái | Tab Nhà hiển thị | Query chạy |
+| --- | --- | --- |
+| Đang bật | dashboard đầy đủ như cũ | tất cả |
+| Đang tắt, tài khoản **có kỹ năng** | một card gọn: "Đang ngừng nhận yêu cầu thuê" + **[Bật lại]** + dòng giải thích + "Quản lý nhận thuê" | chỉ `Scheduled` và `Starting` |
+| Đang tắt, không có kỹ năng | không có card (đúng như trước) | không |
+
+Ca **đã hẹn / đang diễn ra vẫn được liệt kê** khi đang tắt, vì API không huỷ đơn lúc đổi chế độ — để mất
+thứ người dùng đã cam kết là hỏng việc. Doanh thu, khoản chờ về ví, yêu cầu chờ phản hồi và đánh giá thì
+ẩn, và query của chúng cũng không gọi.
+
+Tín hiệu "có thể bật lại" lấy miễn phí: `/users/me` vốn đã trả `skills[]`
+([users.service.ts:147](../play-together-be/src/modules/users/users.service.ts)), nên chỉ thêm
+`hasSkills: profile.skills.length > 0` vào mapper (`src/api/v2/mappers.ts:220`, kiểu ở `src/api/types.ts:106`)
+— không thêm request, không đổi API.
+
+Cùng đợt: `player_mode_disabled` dịch lại cho đúng nghĩa. BE bắn mã này khi **chính người dùng** đang ở chế
+độ player mà bấm đi thuê, nhưng app lại nói "Người chơi này đang ngừng nhận thuê." — ngược hẳn. Nay là
+"Bạn đang ở chế độ nhận thuê. Tắt chế độ này trước khi đi thuê người khác." (`src/lib/errorMessages.ts:31`).
+
+### Kiểm chứng (Metro web + API dev, account `demo.player1`)
+
+```
+đăng nhập bằng UI → /home            → "Ca trực của bạn · Đang nhận yêu cầu thuê · Doanh thu hôm nay"
+tắt bằng công tắc ở /manage-hiring   → "Ngừng nhận yêu cầu thuê"
+mở lại /home (tải lại trang, tức là vào lạnh)
+                                     → "Đang ngừng nhận yêu cầu thuê"
+                                       "Khi đang tắt, bạn không nhận đơn mới và cũng không đi thuê được.
+                                        Ca đã hẹn vẫn còn hiệu lực."
+                                       [Bật lại]  +  "Quản lý nhận thuê"
+                                       (không còn dòng doanh thu / yêu cầu chờ nào)
+bấm [Bật lại]                        → dashboard đầy đủ trở lại ngay ("Đang nhận yêu cầu thuê",
+                                       "Doanh thu hôm nay", "Yêu cầu chờ phản hồi")
+trạng thái cuối = như lúc bắt đầu kiểm (isPlayer = true)
+gate: FE typecheck 0, FE lint 0
+```
+
+### Sự cố môi trường gặp phải khi kiểm — anh cần biết trước khi test máy
+
+1. **API chết và DB dev cũ không mở được nữa.** Trong lúc kiểm, tiến trình API (khởi động từ 21:05) chết;
+   thử khởi động lại thì PGlite báo `RuntimeError: Aborted()`. Đã loại trừ nguyên nhân "hai process cùng mở":
+   liệt kê toàn bộ `node.exe` không còn tiến trình nào thuộc repo này, và mở `.data/pgdata` bằng một script
+   PGlite độc lập **cũng abort**. Kết luận: cluster ở `.data/pgdata` hỏng sau lần bị giết cứng.
+  Cách xử lý: **không xoá gì cả** — dựng DB mới ở `.data/pgdata-fresh` (chạy migration 0001→0009 + seed),
+   còn thư mục cũ nằm nguyên đó nếu muốn xem lại.
+2. **Metro hỏng module graph** ("Requiring unknown module \"892\"") → khởi động lại với `--clear`.
+3. **Bẫy đáng nhớ nhất:** PGlite là tiến trình đang mở, nên dữ liệu do một process **khác** ghi vào sau đó
+   (ở đây là `seed-cli`) sẽ không hiện ra với API. Hệ quả là mọi lần đăng nhập trả `invalid_credentials`
+   dù mật khẩu đúng — đã xác định bằng cách mở thẳng DB và `bcrypt.compare` cho `true`. Chữa: chạy seed
+   **trước**, rồi mới bật API.
+4. Vì DB dev là bản seed mới: các đơn/ledger từng tạo trong những đợt kiểm trước **không còn**. Tài khoản
+   demo (`demo.player1..6`, `demo.hirer1..2`, admin, charity) hoạt động lại bình thường, điện thoại vẫn trỏ
+   `http://192.168.1.8:3000/api/v2`.
+
+### GAP còn lại
+
+- Chưa kiểm trên máy thật (mọi thứ ở đây là Metro web). **Đã sai ở chính chỗ này**: ảnh chụp từ máy cho thấy
+  card khi tắt bị vỡ bố cục dù `innerText` trên web đọc ra đủ mọi dòng — xem §27.
+- Card khi tắt chưa cho đổi **giá/giờ online** tại chỗ — vẫn phải vào "Quản lý nhận thuê". Có chủ đích: thêm
+  hai ô nhập vào thẻ sẽ biến thẻ thành một màn hình.
+- `hasSkills` chỉ đúng với tài khoản đã có kỹ năng. Một người từng bật player mode rồi **xoá hết kỹ năng**
+  sẽ mất luôn card — khi đó họ cũng không thể bật lại, nên API vẫn đúng; chỉ là đường thoát duy nhất còn lại
+  là thêm kỹ năng. Chưa xử lý, cần quyết định nếu anh thấy đáng.
+
+---
+
+## 27. Ảnh chụp từ máy bắt lỗi §26 + redesign dòng đánh giá
+
+Anh chụp hai ảnh lúc 22:19: card "Ca trực" khi tắt chiếm gần hết màn hình, **mất tiêu đề và mất dòng trạng
+thái** (chỉ còn cái chấm tròn), nút "Bật lại" nằm sát mép dưới và bị nút cài đặt nổi đè lên. §26 báo "đã
+kiểm" vì kiểm bằng `innerText` — chữ có trong DOM nhưng bố cục thì sai. Bài học: đọc chữ không phải là nhìn
+màn hình.
+
+### Nguyên nhân
+
+`Button` của hệ mặc định **`fullWidth = true`** (`src/components/ui/Button.tsx:70`). Đặt nó vào `headRow`
+(một hàng `row` mà nhãn bên cạnh là `flex: 1, minWidth: 0`) nghĩa là đòi `width: 100%` trong hàng đó: Yoga
+nén `headLabelWrap` về gần 0 → tiêu đề và nhãn trạng thái bị cắt tới mức vô hình, hàng tự cao lên, và vì
+thẻ cao bất thường nên nút rơi đúng chỗ FAB cài đặt.
+
+### Đã sửa
+
+- Nút "Bật lại" ra khỏi `headRow`, đặt ở hàng riêng `pausedActionRow` (tự căn giữa, `minWidth: 160`,
+  `fullWidth={false}`). "Quản lý" quay về đúng chỗ cũ ở góc phải hàng tiêu đề — cùng khuôn với thẻ khi đang
+  bật, thay vì một đường link rời ở đáy thẻ.
+- Dòng đánh giá dưới "Chưa có khoản nào chờ thanh toán": trước đây là một `Text` vô danh
+  `4.8 ★ từ 24 đánh giá` (sao vẽ bằng ký tự, không bấm được). Nay là một hàng dẫn đường giống hàng số dư chờ:
+  viên thuốc nền `goldSoft` chứa ngôi sao + điểm, nhãn "24 đánh giá từ người thuê", dấu › ở cuối, và bấm vào
+  mở **`/ratings/{userId}`** của chính mình (không kèm `canReport` — báo bình luận là việc của người thuê).
+
+### Kiểm chứng (iframe 375 px, account `demo.player1`, DB seed mới có 24 đánh giá)
+
+```
+thẻ khi BẬT   : cao 249 px; hàng đánh giá x=33 y=444 w=309 h=34, đọc "4.8 | 24 đánh giá từ người thuê"
+tắt bằng API  : PATCH /users/me/player-mode {enabled:false} -> 200
+thẻ khi TẮT   : cao 196 px (trên máy trước đây ~500 px toàn trắng)
+                tiêu đề "Ca trực của bạn" 228x23 tại x=33  <- trước đây bị nén xuống 0
+                "Đang ngừng nhận yêu cầu thuê" + "Quản lý" + dòng giải thích: đủ
+                [Bật lại] 160x44, căn giữa (x=108 trên bề rộng 375)
+bấm [Bật lại] : thẻ đầy đủ trở lại
+bấm hàng đánh giá: /ratings/beef64a4-… -> "Chi tiết đánh giá · Tất cả · 5 sao"
+trạng thái cuối = isPlayer bật lại như đầu; gate typecheck 0, lint 0
+```
+
+### GAP
+
+- Vẫn chưa có ảnh từ máy cho bản sửa này — mới chắc ở số đo bố cục, không chắc ở cảm giác. Anh chụp lại giúp
+  một tấm là đủ đóng mục này.
+- FAB cài đặt nằm ở góc dưới phải mọi màn; khi thẻ ngắn lại thì hết đè, nhưng nó là nút nổi toàn cục — nếu
+  sau này có hàng bấm được sát đáy thẻ, vẫn có thể đè. Chưa đổi.
+
+
+
+
 
 
 
