@@ -1921,6 +1921,83 @@ trạng thái cuối = isPlayer bật lại như đầu; gate typecheck 0, lint 
 - FAB cài đặt nằm ở góc dưới phải mọi màn; khi thẻ ngắn lại thì hết đè, nhưng nó là nút nổi toàn cục — nếu
   sau này có hàng bấm được sát đáy thẻ, vẫn có thể đè. Chưa đổi.
 
+---
+
+## 28. #120, #119, #121 — đã thực hiện: gỡ bẫy DB dev, quét bàn phím, thêm CI cho FE và admin
+
+### #120 — `npm run start:prod` không lên được nữa
+
+`play-together-be/.env:8` vẫn ghi `PGLITE_DIR=.data/pgdata` trong khi API dev chạy nhờ env override trỏ
+`.data/pgdata-fresh` (§26). nghĩa là lệnh thường dùng của anh gặp đúng cluster đã hỏng.
+Đổi `.env` sang `.data/pgdata-fresh`, **không xoá** `.data/pgdata`, build lại (`nest build`, exit 0) rồi khởi
+động đúng bằng `npm run start:prod`, không truyền env nào:
+
+```
+GET  /api/v2/health -> 200 {"status":"ok","database":"up"}
+LOG  [Database] Connected using pglite (migrated)
+POST /api/v2/auth/login (demo.player1) -> 200 accessToken
+GET  /api/v2/users/me                  -> 200 isPlayer=true, rate=4.79, skills=2, price=80000
+```
+
+`.env` đang gitignored nên không có gì phải commit; `.env.example` giữ nguyên giá trị mặc định
+`.data/pgdata` vì clone mới sẽ tự tạo thư mục đó.
+
+### #119 — con số "16 màn" trước đây là sai, số thật là 5
+
+Quét bằng grep trên toàn `src`, không nhớ từ ghi chú cũ: 23 màn có ô nhập, 15 màn tự bọc
+`KeyboardAvoidingView`, 5 màn `(auth)` dùng KAV của `components/auth/AuthShell.tsx`.
+**`softwareKeyboardLayoutMode` mặc định của Expo là `resize`** (xác nhận trong tài liệu Expo, không đoán) —
+Android tự co cửa sổ khi bàn phím hiện, nên phần việc còn lại là iOS và là `keyboardShouldPersistTaps`.
+
+Đã sửa:
+
+| Màn | Thiếu gì | Đã làm |
+| --- | --- | --- |
+| `app/(tabs)/charity.tsx` | FlatList để mặc định `never`: chạm thẻ/✕ khi bàn phím đang mở bị nuốt nhịp đầu | thêm `keyboardShouldPersistTaps="handled"` |
+| `app/filter.tsx` | hai ô "Từ / Đến" nằm **giữa** trang, iOS che là mất chỗ nhập | bọc ScrollView + footer vào KAV (`padding` cho riêng iOS) |
+| `app/manage-hiring.tsx` | ô giá giữa trang, vừa thiếu KAV vừa thiếu persistTaps | bọc KAV + `keyboardShouldPersistTaps="handled"` |
+| `components/auth/AuthShell.tsx` | `behavior="padding"` cứng → trên Android cộng dồn với `adjustResize`, thành khoảng trắng thừa | `Platform.OS === 'ios' ? 'padding' : undefined` |
+| `app/personal-change-password.tsx` | y hệt AuthShell | như trên |
+
+Không cần sửa (đã kiểm từng file): `app/search.tsx` và `app/search-history.tsx` — ô nhập nằm ở thanh trên
+cùng nên bàn phím không che được, và list đã có `handled`. Quét lại lần cuối: file có `TextInput` mà thiếu
+`keyboardShouldPersistTaps` giờ chỉ còn đúng `components/ui/TextField.tsx` (là định nghĩa component, chỗ
+cuộn thuộc về màn dùng nó); mọi màn dùng `TextField` đều đã có `handled`, trừ 5 màn `(auth)` — chúng nhận từ
+AuthShell.
+
+Kiểm chứng bố cục (iframe cùng gốc 375×740, Metro web, tài khoản player):
+
+```
+/filter        : [Đặt lại][Áp dụng] y=674 h=50 -> đáy 724 < 740, footer vẫn ghim đúng;
+                 hai ô giá ở y=819 (dưới vùng hiển thị, nằm trong ScrollView) -> đúng chỗ KAV lo trên iOS
+/manage-hiring : render đủ 9 nút, "Chi phí mỗi giờ" + [Cập nhật] y=410
+/charity       : danh sách quỹ render bình thường sau khi thêm prop
+gate: tsc --noEmit exit 0, expo lint exit 0
+```
+
+### #121 — FE và admin trước đây không có pipeline nào
+
+`ls */.github/workflows` chỉ trả về `play-together-be/.github/workflows/ci.yml`. Thêm
+`play-together-fe/.github/workflows/ci.yml` (npm ci → `expo lint` → `tsc --noEmit` →
+`npx expo export --platform web`) và `play-together-admin/.github/workflows/ci.yml`
+(npm ci → `oxlint` → `tsc -b` → `vite build`), cùng khung với ci.yml của API: `permissions: contents: read`,
+`concurrency` theo ref, Node 22, cache npm.
+Chạy trước từng lệnh ở máy để không hứa hão: FE `expo export --platform web` exit 0 (đã bundle hết route),
+admin `lint`/`typecheck`/`build` đều exit 0. `dist/` của FE và `dist` của admin đều gitignored nên artifact
+CI không lẫn vào repo. `EXPO_PUBLIC_API_URL` thiếu trong CI cũng không làm hỏng bundle —
+`src/api/endpoints.ts:2` có giá trị dự phòng `http://localhost:3000/api/v2`.
+
+### GAP còn lại của đợt này
+
+- Bàn phím là câu chuyện của thiết bị thật: ở đây không tạo được bàn phím ảo, nên mới chứng minh được **bố
+  cục không vỡ** và **iOS sẽ có chỗ thở**, chưa chứng minh được cảm giác gõ trên Android. Cần anh bật bàn
+  phím ở `/filter`, `/manage-hiring` và một màn đăng nhập rồi chụp.
+- Hai file workflow mới nằm trong `.github/workflows/`: đẩy chúng cần PAT có scope `workflow`, nếu không
+  GitHub sẽ chặn cả commit.
+- Vài màn có input vẫn dùng `ScrollView` thường mà không bọc KAV nhưng ô nhập của chúng nằm sát thanh tiêu
+  đề (`/chat/[orderId]` dùng KAV riêng) — đã quét, không còn trường hợp giữa trang nào thiếu.
+
+
 
 
 
