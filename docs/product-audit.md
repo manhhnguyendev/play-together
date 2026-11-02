@@ -1478,9 +1478,10 @@ người thuê trở về `availableBalance = 674000`, `pendingBalance = 0` như
   là điều chưa biết — nhưng nói thẳng là hai chỗ này mới chỉ chắc về code, chưa chắc về ảnh.
 - Nút "Rút tiền" khi `isError`: logic chặn đã typecheck và đọc được, nhưng chưa bấm thật tới được dòng
   toast (synthetic press không đi tới `Pressable` của nút đó trong harness).
-- **`axios` không đặt `timeout`**: một mạng nửa mở (bắt được sóng, không đi ra ngoài) khiến query treo,
-  màn hình giữ spinner vô hạn thay vì hiện lỗi. Đã thấy đúng dạng này khi harness abort request đầu tiên.
-  Nên đặt `timeout` (15s chẳng hạn) ở `src/api/client.ts` — sửa nhỏ, nhưng phải quyết định con số.
+- ~~**`axios` không đặt `timeout`**~~ — **dòng này sai, đã kiểm lại bằng grep**: cả hai instance đều đã
+  đặt `timeout: 20000` (`src/api/client.ts:47` và `src/api/client.ts:55`). Mạng nửa mở vì thế fail sau
+  20 giây rồi rơi đúng vào nhánh lỗi vừa làm ở mục này, không treo spinner vô hạn. Hiện tượng "query treo
+  ở `pending`" mà harness gặp là do chính nó abort request đầu tiên, không phải do thiếu timeout.
 - "Phiên sắp tới" và "Đánh giá gần đây" chưa render được hàng thật vì DB dev không có đơn đã chấp nhận và
   không có đánh giá nào (đã kiểm bằng API: 0 dòng PROPOSED/SCHEDULED/LIVE cho cả 6 tài khoản demo).
 - `useOngoingOrderGuard` (§15) vẫn tự đẩy Player đang có request treo vào thẳng `/receive-request/:id`,
@@ -1675,6 +1676,75 @@ hàng "chờ về ví" trên dashboard Player mới (§21).
 Thứ tự tôi kiến nghị: **B → A → C → E → D → F**, vì B/C/E gần như chỉ là nhập file, A động vào luồng tiền
 nhưng chỉ là biểu mẫu, D đổi điểm vào tìm kiếm, F liên quan nhãn tiền. G (receive-request ↔
 hiring-negotiating) để riêng, chỉ làm khi anh xác nhận sau lượt test điện thoại.
+
+---
+
+## 24. #116, #117 — đã thực hiện: bỏ một con số bịa, bỏ một lần gọi trùng, bỏ một bộ nhớ dai
+
+Ba việc này tìm ra khi liệt kê danh sách còn nợ, và đều sửa được trong phạm vi nhỏ. Cùng lúc, một dòng
+GAP ở §21 hoá ra là **sai sự thật** — đã gạch và ghi lại đúng chỗ.
+
+### Dòng GAP sai ở §21
+
+§21 viết "`axios` không đặt `timeout`, màn hình sẽ giữ spinner vô hạn". Kiểm lại bằng grep thì cả hai
+instance đều đã có `timeout: 20000` (`src/api/client.ts:47` và `src/api/client.ts:55`). Hiện tượng "query
+treo ở `pending`" mà harness gặp là do chính nó abort request đầu tiên, không phải do thiếu timeout.
+Đã sửa ngay dòng đó trong §21 thay vì để nó nằm ở đây.
+
+### #116 — màn Thống kê vẽ hai ô giống hệt nhau dưới hai nhãn khác nhau
+
+| | Trước | Sau |
+| --- | --- | --- |
+| `getStatistic` (`src/api/services/users.ts:127`) | gọi `/users/me` **+** `/wallet/earnings/summary`, trả `item1..item4` với `item3 = item4 = completion` | chỉ gọi `/wallet/earnings/summary`, trả `item1..item2` |
+| `statistics.tsx:75-80` | hai ô `CompletionStat`: "Theo ngày" và "Theo tháng" — **cùng một con số**, không có số nào theo ngày hay theo tháng cả | một ô: `40 %` kèm dòng `2/5 đơn đã hoàn thành` |
+| Số lần `/users/me` cho một lần mở màn | 2 (một của `queryKeys.statistic`, một của `queryKeys.profile`) | 1 |
+
+Tỷ lệ hoàn thành giờ tính từ chính hồ sơ mà màn đã tải: `users.ts` không còn cần `/users/me`, còn màn hình
+dùng `user.numOfFinishedOrder / user.numOfOrder`. Muốn có hai con số "theo ngày / theo tháng" thật thì API
+phải trả theo kỳ — việc đó chưa làm, nên thà hiển thị một con số đúng còn hơn hai con số giống nhau.
+
+Thay đổi nhỏ phải có: `UserModel` thêm `numOfFinishedOrder` (`src/api/types.ts:108`) và mapper nối
+`profile.completedOrdersCount` vào nó (`src/api/v2/mappers.ts:223`). `PlayerDashboard` chỉ đọc `item1`/
+`item2` nên không bị ảnh hưởng — đã kiểm lại bằng ảnh chụp màn hình.
+
+### #117 — `playerListDraft` là module singleton không ai dọn
+
+`clear()` có tồn tại nhưng không nơi nào gọi; màn `player-list` đọc `get()` và giữ nguyên dữ liệu đó cho
+tới khi có người ghi đè. Hệ quả: mở lại màn này từ một lối vào khác (deep link, mount lại) sẽ thấy đúng cái
+danh sách của ray trước đó, mà tiêu đề thì vẫn là danh sách mới.
+
+Sửa: `playerListDraft.take()` **đọc và xoá trong một nhịp**, `player-list.tsx` gọi nó đúng một lần lúc mount
+(`useState(() => playerListDraft.take())`), và màn rỗng phân biệt hai trường hợp — "chưa có ai trong danh mục
+này" khi thật sự có danh sách rỗng, "Danh sách chỉ hiện khi mở từ một mục trên trang Chủ." khi không có
+payload nào được giao.
+
+Đây là bản sửa nhỏ. Bản đúng nghĩa (màn dùng query theo `?list=` để deep-link được thật) vẫn để ngỏ, vì
+nó cần quyết định cách truyền danh sách "Đề xuất cho bạn" — khoá query của nó chứa cả `topPlayerIds`.
+
+### Kiểm chứng
+
+Metro web + API dev đang chạy, account `demo.player1` (đã kiểm cả hai vai):
+
+```
+/statistics (load thẳng)     → "Tỷ lệ hoàn thành · 40 % · 2/5 đơn đã hoàn thành"
+                              "Số đơn thuê đã nhận: 5" khớp mẫu số, "…đúng giờ: 1" là số khác, không bị trộn
+/network xhr trên màn đó     → /users/me + /wallet một cặp, /wallet/earnings/summary một lần
+/player-list (load thẳng)    → "Không có dữ liệu · Danh sách chỉ hiện khi mở từ một mục trên trang Chủ."
+home → [Xem tất cả] ray "Các người chơi mới" → tiêu đề "Các người chơi mới", 5 dòng
+home → [Xem tất cả] ray "Đề xuất cho bạn"    → tiêu đề "Đề xuất cho bạn", 2 dòng  ← không lẫn dữ liệu
+home (dashboard Player)      → "Doanh thu hôm nay 0 đ · Doanh thu tháng này 14.400 đ" vẫn đúng
+gate                          → FE `typecheck` 0, FE `lint` 0
+```
+
+### GAP còn lại của đợt này
+
+- Bản trên điện thoại chưa test; cả ba sửa đều là mã nguồn mở, Metro web mới là nơi đã thấy.
+- Chưa có lối vào thật nào deep-link vào `/player-list`, nên đường "mở từ ngoài vào" mới chỉ chắc ở phần màn
+  rỗng — chưa chứng minh được tình huống "danh sách của ray khác" trên máy thật.
+- Phát hiện thêm, **chưa sửa**: tab Cá nhân gọi `/users/me` hai lần khi mở app (một của `refreshUser()`
+  trong `useOngoingOrderGuard`, một của query `queryKeys.profile` mà chính màn đó dùng). Không hiện ra lỗi
+  nào, chỉ thừa một round-trip; gộp được nhưng đụng tới thứ tự khởi động phiên nên để riêng.
+
 
 
 
