@@ -2220,6 +2220,51 @@ gate      : tsc --noEmit 0, expo lint 0 (không warning nào)
 Còn lại của §23: nhóm D (search + search-history → một màn, nên test máy trước), nhóm C chờ anh quyết phần
 `report-comment` (§31), C2 gác tới sau khi test máy.
 
+## 33. §23 nhóm D — đã thi công: hai màn tìm kiếm còn một
+
+`search-history.tsx` (điểm vào, có ô nhập) và `search.tsx` (kết quả, cũng có ô nhập) giờ là một màn
+`search.tsx`:
+
+- **Chưa có từ khoá** → ba mục "Tìm kiếm gần đây / Top tìm kiếm / Các tựa game hot" (thay cho một
+  `EmptyState` tĩnh trước đây). **Có từ khoá** → danh sách kết quả như cũ. Nút "Xoá từ khoá" ngay trong ô
+  nhập đưa người dùng về đúng phần gợi ý, không cần quay lại màn trước.
+- Gợi ý không còn `push('/search?q=…')` mà gọi `applyKeyword(value)` tại chỗ: set `input` + `keyword`,
+  reset `pageSize` về 20 và `record(value)` (`POST /search-history`). `lastRecorded` vẫn chặn ghi trùng.
+  Nhánh `?q=` vẫn giữ cho deep-link sau này, dù hiện không còn ai push.
+- Toàn bộ phần gợi ý nằm trong `src/components/search/SearchSuggestions.tsx` **mới**, và chỉ mount khi
+  chưa có từ khoá — ba request (`/search-history`, `/search-history/hot`, `/games/most-favorited`) không
+  còn chạy phía sau một danh sách kết quả. Hai toast xoá lịch sử và confirm "Xoá tất cả" giữ nguyên như
+  màn cũ.
+- `HomeAppBar.tsx:31` chuyển điểm vào sang `/search`; `search-history.tsx` bị xoá. Không có `SHEET_ROUTES`,
+  `deepLink` hay route nào khác nhắc tới tên cũ (kiểm bằng grep — chỉ còn chuỗi endpoint và query key).
+- Ô nhập giờ `autoFocus` khi mở màn không kèm `?q=` — đúng hành vi màn lịch sử cũ, vì `/search` đã là
+  điểm vào.
+
+Kiểm chứng (Metro web, `demo.player1`, hết một vòng):
+
+```
+Home → bấm ô tìm kiếm : path /search, hiện đủ 3 mục, "Chưa có tìm kiếm nào"
+network khi mới mở    : GET /search-history?limit=5, /search-history/hot, /games/most-favorited (3 request)
+bấm chip "Valorant"   : input lên "Valorant", GET /users?q=Valorant&pageSize=20 [200] + POST /search-history [201]
+                       → "Không có dữ liệu" (dev DB không có player nào game này — đúng, không phải lỗi)
+bấm "Xoá từ khoá"     : về lại gợi ý, "Valorant" đã xuất hiện ở cả "gần đây" và "Top"
+bấm X một hàng        : hàng mất ở cả hai mục (query key top là con của ['search-history'] nên invalidate kèm)
+"Xoá tất cả"          : toast "Đã xoá lịch sử tìm kiếm", hai mục trở về "Chưa có…"
+gõ tay + Enter        : submit chạy, "a" trả về 3 card player thật (Nguyễn Minh Anh / Phạm Gia Huy / …)
+/filter               : mở được, chọn chữ cái N + Áp dụng → về /search, giữ từ khoá "a",
+                       hiện "Đang áp dụng bộ lọc" và danh sách còn đúng 1 card
+gate                  : tsc --noEmit 0, expo lint 0
+dọn dev data          : lịch sử tìm kiếm đã xoá sạch, bộ lọc đã reset về mặc định
+```
+
+Điểm để ý, chưa sửa: thanh "Đang áp dụng bộ lọc" vẫn hiển thị khi từ khoá trống (gợi ý hiện bên dưới).
+Trước khi gộp cũng vậy, và nó nói thật trạng thái đang lưu trong `useDiscoveryFilter` — bộ lọc sẽ áp cho
+lần tìm kế tiếp — nên giữ. Nếu anh muốn nó biến mất khi chưa có kết quả thì một điều kiện là xong.
+
+Còn lại của §23: nhóm C (`report-comment`, chờ anh quyết), C2 (gác tới sau khi test máy), và phần G
+`history/[orderId]` gọi trùng — chỉ là sửa code, không đổi điều hướng.
+
+
 
 
 
