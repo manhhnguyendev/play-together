@@ -2068,6 +2068,70 @@ tách scaffold và header sheet, đổi lại ít hơn hai màn và hết một 
 - `dismissTo('/update-hours')` là đích cứng: nếu sau này nhóm D/E đổi tên route thì phải sửa theo.
 - Nhóm A (ví) chưa đụng; 4 dòng "(Sắp ra mắt)" sẽ ẩn trong đợt đó.
 
+---
+
+## 30. §23 nhóm A — đã thi công: 5 màn ví còn 2, hết tương tác giả
+
+Anh duyệt "ẩn đi, chỉ để kênh đang chạy được" cho 4 dòng "(Sắp ra mắt)", và nhóm A làm ngay sau B.
+
+### Cấu trúc mới
+
+| Trước | Sau |
+| --- | --- |
+| `deposit-method` → `deposit` | `deposit` (số tiền + hint giới hạn + hàng "Ví MoMo" có logo) |
+| `withdraw-amount` → `withdraw-method` → `withdraw` | `withdraw` (số tiền + số dư khả dụng + số điện thoại nhận) |
+
+`deposit-method.tsx`, `withdraw-method.tsx`, `withdraw-amount.tsx` đã xoá. Component
+`components/wallet/PaymentMethodRow.tsx` trở thành code chết nên xoá theo, cùng hai asset chỉ phục vụ dòng
+"Sắp ra mắt": `assets/images/paypallogo.png`, `assets/images/onlinebankinglogo.png`. `momologo.png` vẫn dùng.
+Không còn chỗ nào tham chiếu: `grep deposit-method|withdraw-method|withdraw-amount|PaymentMethodRow src` trả
+về rỗng.
+
+Điểm vào đổi theo: `personal.tsx` (Nạp/Rút), `send-hiring-request.tsx` (nhánh thiếu số dư) nay push thẳng
+`/deposit` và `/withdraw`. Trong `_layout.tsx`, `SHEET_ROUTES` giảm từ 8 còn 5 tên — `deposit` và `withdraw`
+vẫn là sheet nên giữ nguyên hiệu ứng trượt và vuốt xuống.
+
+Giữ nguyên như §23 yêu cầu: guard "số dư đọc lỗi thì không cho rút" (kèm hàng chữ đỏ + nút Thử lại), kết
+thúc rút bằng `replace('/transactions')` để không vuốt lùi lại một lệnh đã nộp, và body gọi API
+(`moneyWithdraw` + `phoneNumberMomo`) đúng như màn cũ.
+
+Rút gộp thêm một thứ màn cũ không có: nút ở trạng thái `loading` trong lúc gửi, vì giờ một màn duy nhất vừa
+kiểm tra vừa POST.
+
+### Kiểm chứng (Metro web + API dev, `demo.player1`, ví bắt đầu 0đ)
+
+```
+/deposit  : "Nạp tiền" + ô Số tiền + hint "Nạp tối thiểu 10.000đ, tối đa 50.000.000đ" + hàng "Ví MoMo" (img alt=MoMo)
+            nhập 10.000 -> [Nạp tiền] -> toast "Nạp tiền thành công (thanh toán thử nghiệm)"
+            GET /wallet -> availableBalance 10000
+/withdraw : màn gộp đủ 4 khối (số tiền, số dư khả dụng 0đ, nhãn "Nhận qua MoMo", số điện thoại)
+            bỏ trống  -> "Vui lòng nhập số tiền!"
+            5.000     -> "Số tiền rút tối thiểu là 10.000đ"
+            99.999.999-> "Số tiền rút tối đa là 50.000.000đ"
+            10.000 khi số dư 0 -> "Số dư khả dụng không đủ!"
+            10.000 + 0901234567 sau khi nạp -> "Rút tiền thành công" rồi tới /transactions
+            GET /wallet -> availableBalance 0
+            GET /wallet/withdrawals -> [{amount:10000, status:PENDING, provider:MOMO, note:"0901234567"}]
+            POST /wallet/withdrawals/{id}/cancel -> CANCELLED, GET /wallet -> availableBalance 10000
+gate: tsc --noEmit exit 0, expo lint exit 0
+```
+
+Số dư khả dụng 0 khiến nhánh "thiếu số điện thoại" không tới được — đó là thứ tự kiểm tra cố ý (tiền trước,
+số sau), nhưng cũng có nghĩa là nhánh đó mới chỉ đọc code, chưa bấm thật.
+
+### Hệ quả để lại trên DB dev (nói rõ, không giấu)
+
+`demo.player1` hiện có 10.000đ và hai bản ghi test: một DEPOSIT mock, một WITHDRAWAL đã CANCELLED. Ledger
+không xoá được nên đây là dữ liệu thật của lần kiểm này; reseed sẽ sạch.
+
+### GAP
+
+- Chưa chạy trên máy: chiều `replace('/transactions')` từ trong sheet và cảm giác khi sheet "Rút tiền" dài
+  hơn (bốn khối thay vì hai).
+- BE nhét số điện thoại MoMo vào cột `note` của withdrawals (code cũ, không đổi ở đây) — nếu sau này cần
+  thống kê kênh rút thì nên có cột riêng.
+
+
 
 
 
