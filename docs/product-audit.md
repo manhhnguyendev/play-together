@@ -1862,7 +1862,7 @@ gate: FE typecheck 0, FE lint 0
    **trước**, rồi mới bật API.
 4. Vì DB dev là bản seed mới: các đơn/ledger từng tạo trong những đợt kiểm trước **không còn**. Tài khoản
    demo (`demo.player1..6`, `demo.hirer1..2`, admin, charity) hoạt động lại bình thường, điện thoại vẫn trỏ
-   `http://192.168.1.8:3000/api/v2`.
+   `http://192.168.1.20:3000/api/v2`.
 
 ### GAP còn lại
 
