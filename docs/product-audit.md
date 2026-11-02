@@ -1992,10 +1992,82 @@ CI không lẫn vào repo. `EXPO_PUBLIC_API_URL` thiếu trong CI cũng không l
 - Bàn phím là câu chuyện của thiết bị thật: ở đây không tạo được bàn phím ảo, nên mới chứng minh được **bố
   cục không vỡ** và **iOS sẽ có chỗ thở**, chưa chứng minh được cảm giác gõ trên Android. Cần anh bật bàn
   phím ở `/filter`, `/manage-hiring` và một màn đăng nhập rồi chụp.
-- Hai file workflow mới nằm trong `.github/workflows/`: đẩy chúng cần PAT có scope `workflow`, nếu không
-  GitHub sẽ chặn cả commit.
+- Hai file workflow mới nằm trong `.github/workflows/`: đã đẩy thành công (FE `5416abb`), GitHub Actions
+  accept cả hai — không cần thêm scope nào cho PAT hiện tại.
 - Vài màn có input vẫn dùng `ScrollView` thường mà không bọc KAV nhưng ô nhập của chúng nằm sát thanh tiêu
   đề (`/chat/[orderId]` dùng KAV riêng) — đã quét, không còn trường hợp giữa trang nào thiếu.
+
+---
+
+## 29. §23 nhóm B — đã thi công: 4 màn giờ/kỹ năng còn 2
+
+Anh duyệt thứ tự **B → A → C → E → D → F** và mục tiêu §23 là **giảm màn, không giảm chức năng**.
+
+### Giờ: `add-hour` + `update-hour` → `hour-form.tsx`
+
+Hai màn là bản sao gần từng dòng (cùng `TimeRangeFields`, cùng kiểm tra khoảng giờ, cùng invalidate
+`queryKeys.datings`), chỉ khác một động từ. Gộp thành `app/hour-form.tsx`:
+
+- `/hour-form` = thêm mới (chọn ngày trong tuần, `POST /users/me/availability`).
+- `/hour-form?id=…` = chỉnh sửa (`PATCH /users/me/availability/{id}`).
+- **Hợp đồng route đổi thật**: `update-hours` trước đây truyền record thành 4 param chuỗi phẳng
+  (`dayInWeek`, `fromHour`, `toHour` bằng string); nay chỉ còn `?id=` và màn hình tự đọc bản ghi từ
+  `queryKeys.datings(userId)` — đúng key mà danh sách đang dùng nên không thêm request, và deep-link vào
+  `?id=` cũng mở được.
+- Thoát sau khi lưu: `router.back()` → `router.dismissTo('/update-hours')`, vì màn giờ có thể tới thẳng theo
+  id chứ không chỉ từ danh sách.
+- Không có đường dẫn cũ nào còn sót: `grep add-hour|update-hour` trong `src` trả về 0; hai màn không nằm
+  trong `SHEET_ROUTES` nên không phải đăng ký lại animation.
+
+### Kỹ năng: `add-skill` → lớp phủ trong `update-skills`
+
+`components/skills/SkillPickerSheet.tsx` (Modal + lớp phủ, cùng khuôn `CancelOrderDialog`): lưới checkbox các
+game chưa có, đếm "Đã chọn n/5", `POST /users/me/skills` rồi invalidate `gamesOfUser` và tự đóng. Giữ nguyên
+guard `canDelete = !isPlayer || games.length > 1` và chặn `existing + selected > 5`.
+
+**Một self-correction đáng ghi lại**: bản đầu mount Modal thường trực với `visible={pickerOpen}`. Đo trên Metro web
+thì sau khi đóng, node `[aria-modal="true"]` vẫn nằm trong DOM ở 375×740, `pointer-events: none` nên không
+chặn chạm (xóa kỹ năng vẫn chạy), nhưng nội dung cũ vẫn đọc được — với app gắn nhãn accessibility khắp nơi
+thì đó là rác trong cây tiếp cận. Đổi thành mount có điều kiện `{pickerOpen ? <SkillPickerSheet/> : null}`;
+đo lại: khi đóng còn **0** node `[aria-modal]` và **0** checkbox. Đổi lại là không còn animation khi đóng —
+nhận thấy và chấp nhận.
+
+### Hai lỗi phụ bắt được khi đi qua màn này
+
+1. **Kỹ năng mới không bao giờ chọn được rank**: `SkillRow` bật SelectField theo `hasRank = rankId !== 'None'`
+   và chỉ query danh sách rank khi `hasRank` — nên kỹ năng vừa thêm (rank rỗng) không có query, không có ô
+   chọn, vĩnh viễn không set được rank. Đã đổi: luôn query rank theo `gameId`, ô chọn hiện khi game có rank.
+2. **Tên game không nhất quán giữa hai nửa luồng**: lưới chọn hiển thị `displayName` ("Liên Quân Mobile") còn
+   thẻ trong danh sách hiển thị `name` ("Arena of Valor"). Nay cả hai dùng `displayNameOfGame`.
+
+### Kiểm chứng (Metro web + API dev trên `.data/pgdata-fresh`, tài khoản `demo.player1`)
+
+```
+đọc  : /update-hours -> 7 khung giờ, gộp đúng theo ngày
+thêm : chọn Thứ 5, điền 07:00-08:00, [Thêm mới] -> toast "Thêm thành công",
+       /update-hours hiện "Thứ 5: • 07:00 - 08:00"
+sửa  : chạm hàng -> URL /hour-form?id=183f2f6f… (chỉ id), ô "Từ"=18:00 "Đến"=23:00 đọc từ cache
+       đổi Đến=22:00 -> [Cập nhật] -> về /update-hours, hàng thành 18:00 - 22:00
+       mở lại hàng đó: "Đến"=22:00 (cache đã được invalidate nên đọc số mới) -> đặt lại 23:00
+xóa  : [thùng rác] hàng 07:00-08:00 -> "Xóa thành công", không còn hàng
+kỹ năng: [+ ] -> sheet 25 game, "Đã chọn 0/5"; chọn Đế Chế -> "Đã chọn 1/5" -> [Thêm]
+         -> thẻ "Arena of Valor" xuất hiện, sheet đóng, 0 node aria-modal
+         -> [xóa] restore; Liên Quân (rank trống) nay hiện "Chọn rank", chọn Cao Thủ
+         -> toast "Cập nhật thành công", thẻ hiển thị "Liên Quân Mobile / Cao Thủ"
+dữ liệu dev sau cùng: 2 kỹ năng (Arena of Valor=Cao Thủ, League of Legends=Kim Cương),
+       7 khung giờ như seed ban đầu
+gate: tsc --noEmit exit 0, expo lint exit 0 (0 error, 0 warning)
+```
+
+Số dòng: 1.053 dòng (4 màn cũ + `update-hours`) → 1.116 dòng (2 màn + sheet + scaffold). Nhiều hơn ~3% vì
+tách scaffold và header sheet, đổi lại ít hơn hai màn và hết một ngõ cụt.
+
+### GAP
+
+- Chưa bấm thử trên máy: animation mở sheet (fade) và chiều lùi của `dismissTo` trên stack native.
+- `dismissTo('/update-hours')` là đích cứng: nếu sau này nhóm D/E đổi tên route thì phải sửa theo.
+- Nhóm A (ví) chưa đụng; 4 dòng "(Sắp ra mắt)" sẽ ẩn trong đợt đó.
+
 
 
 
