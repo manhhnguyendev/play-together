@@ -79,6 +79,14 @@ trong `.env` rồi build lại (`docker compose build admin`).
 | Người chơi demo | `demo.player1..6@playtogether.local` | `Demo@12345` |
 | Người thuê demo | `demo.hirer1..2@playtogether.local` | `Demo@12345` |
 
+## Tùy chọn: đăng nhập Google
+
+App và API đã có sẵn `POST /api/v2/auth/google`; chỉ thiếu client ID của bạn.
+Làm theo [docs/google-signin.md](docs/google-signin.md) — tạo OAuth consent screen + client ID
+"Web application", rồi điền cùng một giá trị vào `GOOGLE_CLIENT_ID` (API) và
+`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (app). Tài liệu cũng giải thích vì sao Expo Go không test
+được nút này và kịch bản "tài khoản Google tự đặt mật khẩu qua Quên mật khẩu" chạy ra sao.
+
 ## Script gốc
 
 | Lệnh | Tác dụng |
