@@ -2131,6 +2131,61 @@ không xoá được nên đây là dữ liệu thật của lần kiểm này; 
 - BE nhét số điện thoại MoMo vào cột `note` của withdrawals (code cũ, không đổi ở đây) — nếu sau này cần
   thống kê kênh rút thì nên có cột riêng.
 
+---
+
+## 31. §23 nhóm F — đã làm; nhóm C — tiền đề trong §23 sai, chưa thi công
+
+### F · "Số dư khả dụng" thật ra là tiền chờ (đổi nhãn + chuyển hành động)
+
+Đúng như §23 mô tả: màn `unactive-balance` mang tên "Số dư khả dụng" nhưng liệt kê tiền **chưa** về ví, còn
+nút nhả tiền lại nằm ở tab Cá nhân. Đã làm theo hướng (a):
+
+- `unactive-balance.tsx`: tiêu đề thành **"Tiền đang chờ về ví"**; thêm dòng tổng "Tổng đang chờ: X" và nút
+  **"Thu hồi về số dư khả dụng"** (`POST /wallet/pending-credits/release` → invalidate `unActiveBalances` +
+  `userBalance` + `refreshUser`); mỗi hàng ghi rõ "Về ví từ {dateActive}"; hết dữ liệu thì EmptyState nói
+  thẳng tiền đó đến từ đâu.
+- `personal.tsx`: nút icon "Cập nhật số dư" **không còn gọi release** nữa — nó chỉ tải lại số dư, đúng như
+  nhãn. Hành động liên quan tiền giờ chỉ còn một chỗ, ở màn liệt kê tiền chờ.
+- Hàng dưới số dư tách thành hai: "Khả dụng: X" (chữ thường, không bấm) và **"Đang chờ về ví: Y ›"** (mở
+  màn tiền chờ). Trước đây hàng "Khả dụng: X" dẫn vào màn tiền chờ — tên một đường, nội dung một nẻo.
+  `pendingBalance` = `balance - activeBalance` vì `toLegacyUserBalance` cộng hai thứ lại trong `balance`.
+
+Kiểm chứng (Metro web, `demo.player1`):
+
+```
+/unactive-balance : "Tiền đang chờ về ví" + "Không có khoản nào chờ" + dòng giải thích
+/personal         : hàng nút đọc "Xem tiền đang chờ về ví, 0 đ"; "Cập nhật số dư" vẫn còn nhưng không còn POST release
+gate: tsc --noEmit 0, expo lint 0
+```
+
+**Nhánh "Thu hồi" chưa bấm được thật**: DB dev seed mới không có khoản chờ nào — cả `demo.player1..6` đều
+`pendingBalance: 0`, vì tiền chờ sinh ra từ vòng đời đơn hàng đã hoàn thành. Nút chỉ hiện khi có hàng, nên
+muốn test thật phải chạy một đơn từ thuê tới hết cửa sổ khiếu nại. Ghi rõ ở đây để không nhầm là đã kiểm.
+
+### C · Phát hiện khi đọc code: hai màn tố cáo **không** phải bản sao
+
+§23 ghi `report-comment` và `report/[orderId]` "khác duy nhất endpoint". Đọc lại từng dòng thì không đúng:
+
+| | `report-comment.tsx` | `report/[orderId].tsx` |
+| --- | --- | --- |
+| Nội dung | 4 lý do cố định + "Lý do khác" + ô 500 ký tự | thẻ người bị tố (Avatar + tên) + một ô tự do 1.000 ký tự, **không có lý do cố định** |
+| Endpoint | `POST /ratings/{id}/flag` | `POST /orders/{id}/reports` |
+| Kết thúc | `router.back()` (mở từ `ratings/[userId]`) | `router.replace('/(tabs)/history')` |
+
+Gộp thành một màn thì hoặc phải bịa ra danh sách lý do cho tố cáo đơn hàng (đổi sản phẩm, không phải sửa UI),
+hoặc phải nhét hai chế độ `if (mode)` xuyên từ layout tới submit tới điều hướng — thứ mà chính §23 cảnh báo
+ở nhóm G. Nên **tạm gác nhóm C phần report-comment**, chờ anh quyết: (1) để hai màn như hiện tại, hay
+(2) cho tố cáo đơn hàng một danh sách lý do riêng rồi mới gộp. Phần C2 (`rating/[orderId]` → lớp phủ trong
+`end-order`) vẫn còn hiệu lực (đúng một inbound, đã kiểm lại bằng grep) nhưng động vào màn có polling 10s và
+hai effect tự điều hướng — để sau khi đã test máy.
+
+### Sự cố môi trường đáng nhớ
+
+Metro lại hỏng module graph y như §26 ("Requiring unknown module \"892\"", `/unactive-balance` trả 500 kèm
+`_expo/static-tmp/_error.bundle`). Chữa như cũ: giết tiến trình đang giữ cổng 8081 rồi khởi động lại với
+`--clear`. Đây là lần thứ hai, nên coi `--clear` là bước đầu tiên khi Metro trả 500 trên một route lẻ.
+
+
 
 
 
