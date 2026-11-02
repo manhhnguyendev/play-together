@@ -2264,6 +2264,46 @@ lần tìm kế tiếp — nên giữ. Nếu anh muốn nó biến mất khi ch�
 Còn lại của §23: nhóm C (`report-comment`, chờ anh quyết), C2 (gác tới sau khi test máy), và phần G
 `history/[orderId]` gọi trùng — chỉ là sửa code, không đổi điều hướng.
 
+## 34. Ba ô soạn thảo cho phép dài hơn mức API chấp nhận (đã sửa)
+
+Khi đọc code để quyết nhóm C, tình cờ thấy `report/[orderId].tsx` giới hạn lời nhắn 1.000 ký tự trong khi
+`reports.message` là `varchar(500)`. Quét lại **toàn bộ** `maxLength` của FE và admin đối chiếu từng DTO phía
+API, kết quả:
+
+| Màn | Ô | FE trước | Giới hạn thật (`@MaxLength` + cột DB) |
+| --- | --- | --- | --- |
+| `send-hiring-request.tsx:365` | Lời nhắn cho người chơi | 1000 | `CreateOrderDto.message` 500, `orders.message` varchar(500) |
+| `rating/[orderId].tsx:184` | Nội dung đánh giá | 1000 | `CreateRatingDto.comment` 500, `ratings.comment` varchar(500) |
+| `report/[orderId].tsx:126` | Lý do tố cáo | 1000 | `CreateReportDto.message` 500, `reports.message` varchar(500) |
+
+Cả ba cùng một kiểu lỗi: người dùng viết thoải mái, bấm Gửi, và **nhận HTTP 400** ngay sau khi đã soạn xong
+— đúng loại "nút bấm không ăn" mà §17 đã kết luận là do app bỏ mất lý do server trả về.
+
+- Sửa phía client, không đổi schema: ba màn giờ dùng chung `MAX_MESSAGE_LENGTH = 500`
+  (`src/lib/validators.ts`), có chú thích ghi rõ nó soi gương `varchar(500)` + DTO để lần sau không lệch nữa.
+- Những chỗ còn lại đều **chặt hơn** API chứ không lỏng hơn, nên không thể gây lỗi: chat 500/2000,
+  feedback 1000/2000, tên người dùng 30/100. Các màn khớp sẵn: `report-comment` 500/500, bio 1000/text(DTO 1000),
+  lời nhắn từ thiện 1000/varchar(1000).
+- **Admin web không lệch nào**: mọi `maxLength` (`ReportsPage` 1000 = `ResolveReportDto.note` 1000,
+  `FeedbackPage` 2000, `BroadcastPage` 200/1000, `CatalogPage` 100/50/1000, `CharitiesPage` 150/5000/200/255/20/1000,
+  `WithdrawalsPage` 255) đều bằng hoặc thấp hơn DTO.
+
+Kiểm chứng:
+
+```
+boundary thật qua HTTP (token demo.player1, POST /orders/<uuid>/reports):
+  message 501 ký tự → 400 validation_failed, details.errors =
+    ["message must be shorter than or equal to 500 characters"]
+  message 500 ký tự → 404 order_not_found (tức đã qua validation, vào tới service)
+render: /send-hiring-request?playerId=b7ad586f-… → TEXTAREA "Lời nhắn cho người chơi" maxlength="500"
+gate: tsc --noEmit 0, expo lint 0
+```
+
+Lưu ý môi trường: ngay sau khi sửa, Metro trả 500 cho route `/send-hiring-request` (y như §26 và §31), nhưng
+`src/app/send-hiring-request.bundle` vẫn request được 200 và tải lại trang là màn hình render bình thường —
+lần này **không** cần khởi động lại Metro, không có gì hỏng thật.
+
+
 
 
 
