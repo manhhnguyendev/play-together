@@ -2303,6 +2303,60 @@ Lưu ý môi trường: ngay sau khi sửa, Metro trả 500 cho route `/send-hir
 `src/app/send-hiring-request.bundle` vẫn request được 200 và tải lại trang là màn hình render bình thường —
 lần này **không** cần khởi động lại Metro, không có gì hỏng thật.
 
+## 35. §23 nhóm C — đã thi công: một màn tố cáo, tố cáo đơn hàng có bộ lý do riêng
+
+Anh quyết: gộp một màn và thêm bộ lý do riêng cho tố cáo đơn hàng. §31 từng chứng minh hai màn **không** phải
+bản sao, nên lần này không nhập khung mà viết lại thành **một màn có hai chế độ thật sự**:
+
+- Route duy nhất `src/app/report/[target].tsx`, phân nhánh bằng `?kind=order|rating` (mặc định `order`).
+  Xoá `report/[orderId].tsx` và `report-comment.tsx`; bốn điểm vào đổi theo:
+  `end-order/[orderId]` (2 chỗ), `rating/[orderId]`, `ratings/[userId]`.
+- Nhánh order: vẫn nạp `GET /orders/:id` để lấy thẻ người bị tố (giữ nguyên như màn cũ, không đổi hình dạng
+  đã duyệt trên điện thoại), gửi `POST /orders/:id/reports`, thoát bằng `replace('/(tabs)/history')`.
+- Nhánh rating: **không gọi API nào** (query `enabled: kind === 'order'`), danh tính người đánh giá đi qua
+  param `name`/`avatar` như màn cũ vẫn làm, gửi `POST /ratings/:id/flag`, thoát bằng `back()`.
+- Bộ lý do. Đơn hàng (5 + "Lý do khác"): *Không vào phiên đã hẹn · Bỏ giữa phiên · Lời lẽ xúc phạm, thái độ
+  không phù hợp · Yêu cầu thanh toán ngoài ứng dụng · Nội dung chơi không đúng như đã thoả thuận*.
+  Đánh giá: giữ 4 lý do cũ. **Nội dung gửi đi chính là nhãn đã chọn**, nên `reports.message` giờ đọc được
+  ngay thay vì một đoạn văn tự do — kiểm: hàng trong `/reports/mine` có `message: "Bỏ giữa phiên"`.
+- Ô "Lý do khác" đổi từ `TextInput` tự vẽ sang `TextField variant="floating" multiline` — cùng kiểu hộp với
+  phần còn lại của app (mọi input đã ở `floating` từ pha redesign). Lý do đổi: anh gửi ảnh chụp và báo
+  "ô text không đều". Đo bằng chứng: hộp cũ `marginLeft: 30` mà không có `marginRight`, nên trong card rộng
+  343px nó lệch **30px trái / 0px phải** so với mép trong, và mép phải còn **trôi ra ngoài** dải tint của hàng
+  chọn. Hộp mới đo trong viewport 375px: hàng chọn `33→342`, hộp `33→342` (thẳng hàng tuyệt đối), cao 118px,
+  `maxlength="500"` khớp `varchar(500)` ở §34.
+
+Kiểm chứng (Metro web, đơn thật `fd8fe34f…` do tôi tạo ở dưới, rating thật `d4976d1d…`):
+
+```
+nhánh order  : /report/fd8fe34f…?kind=order → header "LH / Lê Thu Hà" + 5 lý do mới
+               chọn "Bỏ giữa phiên" → hàng đổi nền primaryFaint → Gửi
+               → POST /orders/fd8fe34f…/reports 201, toast "Tố cáo thành công!", path trở thành /history
+               → GET /reports/mine?scope=submitted: message="Bỏ giữa phiên", status PENDING
+nhánh rating : mở bằng đường thật: /ratings/beef64a4…?canReport=1 → bấm "Báo cáo bình luận của Lê Thu Hà"
+               → /report/d4976d1d… (không còn /report-comment), header "LH / Lê Thu Hà", 4 lý do cũ
+               → không có request đơn nào → chọn "Quảng cáo trái phép" → Gửi
+               → POST /ratings/d4976d1d…/flag 200, toast "Báo cáo thành công", quay lại đúng danh sách đánh giá
+chặn gửi     : chưa chọn gì mà bấm Gửi → toast "Vui lòng chọn lý do!", không phát request nào
+gate         : tsc --noEmit 0, expo lint 0
+```
+
+**Phát hiện khi test — một quy tắc BE chưa từng được nói cho người dùng biết**: `ratings.service.ts:75-86` —
+đã tố cáo đối tác của một đơn thì **không còn đánh giá đơn đó được nữa** (409). App dịch `conflict` thành
+"Thao tác xung đột với trạng thái hiện tại." (`errorMessages.ts:82`), tức người dùng báo xong rồi quay lại
+chấm sao thì gặp một câu vô nghĩa. Đây là quyết định sản phẩm (nên hay không cho chấm sao sau khi tố cáo)
+cộng với một mã lỗi riêng, nên tôi ghi lại chờ anh quyết, không tự đổi.
+
+**Dữ liệu dev đã động tới** (cần đơn thật để test): nạp mock 500.000đ cho `demo.player1` (`SUCCEEDED`),
+tắt rồi **bật lại** chế độ người chơi của tài khoản này (`isPlayer=true` như cũ), thuê Lê Thu Hà (`demo.player3`)
+1 giờ, player nhận, hirer `end-early` → đơn `ENDED_EARLY`, một rating 4★, một report PENDING, một flag.
+Sổ cái không hoàn tác được; các hàng đơn/đánh giá/tố cáo này ở lại DB dev và thực ra có ích cho các lượt test
+sau (trước đây DB seed không có đơn nào).
+
+Nhóm C2 (`rating/[orderId]` → lớp phủ trong `end-order`) vẫn gác: màn đó có polling 10s và hai effect tự
+điều hướng, để sau lượt test điện thoại. §23 coi như khép ở nhóm A–F.
+
+
 
 
 
