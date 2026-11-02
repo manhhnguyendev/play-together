@@ -2185,6 +2185,42 @@ Metro lại hỏng module graph y như §26 ("Requiring unknown module \"892\"",
 `_expo/static-tmp/_error.bundle`). Chữa như cũ: giết tiến trình đang giữ cổng 8081 rồi khởi động lại với
 `--clear`. Đây là lần thứ hai, nên coi `--clear` là bước đầu tiên khi Metro trả 500 trên một route lẻ.
 
+## 32. §23 nhóm E — đã thi công: màn phản hồi chi tiết thành accordion trong danh sách
+
+§23 liệt kê cặp `feedback` (danh sách) + `feedback/[feedbackId]` (chi tiết) là hai màn cho một việc đọc.
+Gộp theo hướng bỏ hẳn màn thứ hai:
+
+- `feedback.tsx`: mỗi hàng là một `FeedbackRow` tự quản trạng thái `expanded`. Phần thân (thể loại + nội dung)
+  chỉ tồn tại ở endpoint chi tiết nên gọi `useQuery` với `enabled: expanded` — lần mở đầu mới
+  `GET /feedback/{id}`, đóng/mở lại không gọi nữa vì cache dùng chung `queryKeys.feedbackDetail(id)`.
+  Hàng có `accessibilityRole="button"`, `accessibilityState={{ expanded }}`, `accessibilityHint` đổi theo
+  ("Xem nội dung" / "Ẩn nội dung"), và `renderItem` thay vì render inline trong `keyExtractor`.
+- Ba trạng thái trong vùng mở: đang tải ("Đang tải nội dung…"), lỗi (một nút "Không tải được nội dung. Nhấn
+  để thử lại." gọi `refetch` — không im lặng hiện ô trống), và thành công.
+- `statusOf` và `TYPE_LABELS` trước bị nhân bản ở cả hai màn; giờ chỉ còn một bản trong `feedback.tsx`.
+- Xoá `src/app/feedback/[feedbackId].tsx`. Deep-link `'/feedback/me': '/feedback'` trong
+  `navigation/deepLink.ts:30` vẫn đúng (nó trỏ vào danh sách, chưa từng trỏ vào màn chi tiết), nên không
+  đường nào gãy. Không còn màn nào `push` tới `/feedback/<id>` — kiểm bằng grep, chỉ service và query key nhắc.
+
+Kiểm chứng (Metro web, `demo.player1`):
+
+```
+DB dev không có phản hồi nào (/feedback/mine trả total:0) → tạo một hàng qua chính endpoint màn dùng:
+POST /api/v2/feedback {title:"Kiem tra accordion", type:"FEATURE"} → 201, id c0733063-…, status PENDING
+
+/feedback : "Trung tâm phản hồi" + hàng "Kiem tra accordion / Chờ xét duyệt / 23:58 02/11/2026"
+tap lần 1 : nội dung hiện ngay trong hàng — "Thể loại" → "Đề xuất tính năng hoặc thêm mới danh mục game"
+            + "Nội dung" → đúng message đã ghi
+tap lần 2 : sập về đúng trạng thái ban đầu, không còn chữ "Nội dung"
+network   : GET /api/v2/feedback/c0733063-… [200] chỉ xuất hiện SAU cú tap đầu;
+            /feedback/mine gọi 2 lần (lượt tải + lượt focus invalidate), không có request nào khác
+gate      : tsc --noEmit 0, expo lint 0 (không warning nào)
+```
+
+Còn lại của §23: nhóm D (search + search-history → một màn, nên test máy trước), nhóm C chờ anh quyết phần
+`report-comment` (§31), C2 gác tới sau khi test máy.
+
+
 
 
 
