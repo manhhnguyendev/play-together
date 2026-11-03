@@ -2442,6 +2442,74 @@ cần thêm `@testing-library/react-native` + jest setup, và chỉ đáng làm 
 coverage threshold; test chạy trên Node nên không đụng code native, nghĩa là các defect device-only (§25, #122)
 máy test không tự phát hiện.
 
+## 38. #8 — số liệu hoàn thành theo ngày và theo tháng (endpoint mới + biểu đồ trong app)
+
+Màn Thống kê trước đây chỉ có hai con số tiền "Theo ngày / Theo tháng" lấy từ `wallet/earnings/summary` —
+không có diễn biến, và phíaBE chưa từng bucket theo lịch nào (`grep date_trunc` = 0 kết quả). Thêm cả vòng:
+một endpoint time-series và một biểu đồ thật trong app.
+
+**Endpoint**: `GET /api/v2/users/me/session-stats?granularity=day|month&buckets=1..62` (mặc định `day` / 14),
+trả `SessionStatsView` với `buckets[]` **oldest first**, mỗi ô gồm `bucket` (`2026-11-03` hoặc `2026-11`),
+`startsAt`, `playerSessions`, `playerHours`, `earned`, `hirerSessions`, `spent`. Đặt ở `users` cạnh `me` vì
+`StatsService` (users module) đã là nơi mọi con số công khai của user được suy ra từ bảng gốc.
+
+- **"Hoàn thành" không tự định nghĩa lại**: dùng thẳng `FINISHED_ORDER_STATUSES` (`SETTLED`, `ENDED_EARLY`) từ
+  `src/db/schema/orders.ts:40` — chính file đó ghi rõ các tập trạng thái "used to be re-typed inside the orders,
+  ratings, reports and stats services, and the copies were plain string arrays", nên viết thêm một mảng thứ năm
+  là tự tái tạo cái bug cũ.
+- **Tiền**: `earned` = `playerPayout` (đã trừ phí nền tảng), `spent` = `totalPrice`. Hai series đi kèm
+  `playerSessions/playerHours/hirerSessions` nên một lần đọc trả lời được cả vai trò Player lẫn Hirer; một người
+  có thể giữ cả hai vai, app không phải đoán.
+- **Một lần đọc, không N query**: `or(player_id = me, hirer_id = me)` + `status in finished` +
+  `endedAt >= đầu cửa sổ`, rồi gom vào từng mốc ở JS. Không dùng `date_trunc(..., 'Asia/Ho_Chi_Minh')` vì DB dev là PGlite
+  còn production là Postgres thật — hai bên không hứa như nhau về build ICU có những tên múi giờ nào; còn phép
+  chia mốc lịch đã có sẵn trong `src/common/time` (`startOfDayInZone`) và có test.
+- Helper mới trong `src/common/time/time.ts`: `startOfMonthInZone` và `periodStartsInZone`. Each start is derived
+  from a point *inside* its period instead of by subtracting a fixed span from a boundary — a period is not a
+  fixed number of milliseconds once a timezone observes DST, and months probe mid-month for the same reason.
+- Không có phiên nào bị âm thầm bỏ: cả hai bước chuyển sang trạng thái khép đều đóng dấu `endedAt`
+  (`orders.service.ts:611` cho `ENDED_EARLY`, `:930` cho `SETTLED`), đã kiểm trong code chứ không giả định.
+
+**Test BE**: `time.spec.ts` 6 → 11 ca (mốc địa phương, lùi ngày, lùi tháng, sang năm, đứng đúng lúc giao thừa), và `src/modules/users/session-stats.spec.ts` 9 ca cho phần gom mốc thuần: cửa sổ trống vẫn trả đủ số
+ô (để biểu đồ không nhầm "không có gì" với "không hỏi"), cắt theo nửa đêm giờ máy chứ không theo UTC, player
+khac hirer, `playerPayout` null vẫn tính phiên mà không tính tiền, dữ liệu trước cửa sổ bị loại, mốc tương lai
+rơi vào ô mới nhất chứ không biến mất. **43/43 test BE pass** (trước đó 34).
+
+**App**: `src/components/stats/trendMath.ts` (pure: `buildTrendBars`, `barHeight`, `peakBar`, `shortBucketLabel`,
+`METRIC_CONFIG`) + `src/components/stats/SessionTrendCard.tsx` (2 hàng Chip: Ngày/Tháng và Doanh thu/Phiên đã
+chơi/Giờ đã chơi/Chi tiêu, caption tổng + cao nhất, `accessibilityRole="image"` kèm mô tả đầy đủ). Không thêm
+thư viện biểu đồ nào — stack giữ nguyên, bar vẽ bằng `View`.
+- Tách math khỏi component không phải cho đẹp: jest **không import được component nào** của app lúc này, vì
+  `expo-asset` chỉ được cài nested ở `node_modules/expo/node_modules/expo-asset` (Metro hiểu, còn resolver theo
+  chuẩn Node của jest thì chết ở `expo-font/build/FontLoader.js`). Đã đụng đúng lỗi đó khi thử test cái card.
+  Cách sửa gọn nhất là để logic thuần ở module không import RN; sau này muốn test render thì mới cần map
+  `expo-asset` trong `jest.config.js`.
+- 12 ca mới (`src/components/stats/__tests__/trend.spec.ts`) → **52/52 test FE pass**, `tsc --noEmit` 0,
+  `expo lint` 0, `expo export --platform web` 0.
+- `userService.getSessionStats` + `queryKeys.sessionStats(granularity, buckets)`; đã chạy
+  `npm run openapi:export` (123 paths, có `SessionStatsView`) và `npm run api:generate` để client orval commit
+  không lệch hợp đồng (diff sinh đúng 5 model + 1 endpoint, không churn).
+
+Kiểm chứng thật (API dev + Metro web, tài khoản có đơn thật trong DB dev):
+
+```
+API     demo.player1 (hirer của đơn fd8fe34f…): 2026-11-03 → hirerSessions 1, spent 100.000
+        demo.player3 (player):                  2026-11-03 → playerSessions 1, playerHours 1, earned 9.000
+        month x6 / month x12: bucket 2026-11 nhận đúng cùng một con số
+        không query  → mặc định day/14; granularity=week → 400 validation_failed
+                       buckets=0 / 999 / abc → 400; không token → 401
+App     /statistics demo.hirer1 (chưa có phiên nào): "Chưa có doanh thu nào trong 14 ngày gần nhất."
+        /statistics demo.player1, chọn "Chi tiêu":
+          caption "100.000 đ đã trả cho người chơi trong 14 ngày gần nhất · Cao nhất 100.000 đ (03/11)"
+          đo DOM: đúng 1 cột cao 132px (đỉnh, tô vàng) + 13 cột 2px (đáy) = 14 cột
+        bấm "Theo tháng": 1 cột 132px + 5 cột 2px = 6 cột, axis 06/26 → 11/26
+```
+
+**Số liệu dev đang có rất ít**: DB chỉ có đúng một đơn khép (tạo ở §35), nên biểu đồ lúc này một cột vàng và
+mười ba cột đáy — đó là dữ liệu thật, không phải placeholder. Muốn thấy nhiều cột thì cần seed thêm đơn lịch sử
+hoặc test trên máy với vài phiên thật.
+
+
 ## 37. #6 — `player-list` chuyển từ bộ nhớ tạm sang `?source=`
 
 Màn "Xem tất cả" của năm rail khám phá trước đây nhận dữ liệu qua một module singleton
