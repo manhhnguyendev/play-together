@@ -2709,4 +2709,59 @@ nên càng không có đường bấm tới đó; nó chỉ tới được bằn
 `expo export --platform web` 0.
 
 
+## 41. #124 — một luật đánh giá duy nhất: cờ `canRate` phải khớp với POST
+
+§40 tóm lại: không phải chuyện viết lại câu chữ, mà là hai chỗ trong BE đang diễn giải **cùng một luật** theo hai
+cách. Nay luật đó nằm một chỗ.
+
+**`src/modules/ratings/rating-eligibility.ts`** (mới, thuần): `ratingBlock(input)` trả về lý do chặn đầu tiên theo
+đúng thứ tự mà POST vẫn báo lỗi từ trước tới nay — `notParticipant → orderNotFinished → noCompletionTime →
+windowClosed → reportedOrder → alreadyRated`, và `canRateOrder()` là phủ boolean của nó. `ratingBlockedError()`
+dịch block sang problem+json với message **giữ nguyên từng chữ** các lỗi cũ, riêng ca `reportedOrder` chuyển từ
+`conflict` chung thành mã mới **`rating_blocked_by_report`** (`error-codes.ts`, type `ErrorCode` tự suy ra từ
+object nên không phải sửa gì thêm).
+
+**Hai chỗ đọc luật**:
+- `ratings.service.create()` bỏ hẳn chuỗi `if … throw` thủ công, thay bằng một `Promise.all` lấy report + rating
+  hiện có của người dùng này trên đơn này rồi gọi `ratingBlock`. Đổi nhỏ có chủ đích: hai query giờ chạy cả khi
+  request sẽ bị chặn từ bước trạng thái — đổi lấy một định nghĩa duy nhất, và đây là route viết rất ít lượt.
+- `orders.service.hydrate()` thêm query `reports.orderId … eq(reports.reporterId, viewerId)` (batch, không N+1) và
+  tính `canRate` bằng `canRateOrder(...)`. Biến `withinWindow` cũ **đọc `endedAt` một mình**, còn POST dùng
+  `endedAt ?? scheduledEndAt` — nay cả hai dùng chung phép đó. Xoá luôn alias `FEEDBACK_STATUSES` vì chỉ một chỗ
+  dùng nó.
+
+**App**: `errorMessages.ts` thêm `rating_blocked_by_report: 'Bạn đã tố cáo lượt thuê này nên không đánh giá được
+nữa.'`. `client.ts` chọn `vietnameseMessageFor(code)` **trước** nên câu này thắng bản dịch chung của `conflict`
+("Thao tác xung đột với trạng thái hiện tại.") — người dùng đọc được lý do thật thay vì một câu vô nghĩa.
+
+Kiểm chứng:
+
+```
+Unit  (rating-eligibility.spec.ts, 17 ca): 3 trạng thái feedback được phép · PROPOSED/SCHEDULED/LIVE/CLOSED bị
+          từ chối · outsider chặn trước mọi thứ · không có mốc kết thúc · đúng hẹn vẫn còn cửa (now == deadline),
+          trễ 1ms thì hết · endedAt null nhưng scheduledEndAt còn hạn thì vẫn cho · report chặn dù chưa đánh giá ·
+          report thắng when cả hai · đã đánh giá thì báo alreadyRated · mã + status của từng lỗi
+E2E   (test/rating-block-by-report.e2e-spec.ts, 3 ca, DB seed mới): đơn DISPUTED chưa tố cáo → **cả hai bên đều
+          canRate true** (đối chứng dương, DB dev không tạo được cảnh này) · hirer tố → canRate của hirer thành
+          false và POST ratings trả 409 code `rating_blocked_by_report` · phía player vẫn canRate true rồi POST
+          201, sau đó hasRated true và canRate false
+API dev thật (đơn fd8fe34f…, người hirer đã tố từ §35):
+          GET /orders/{id}   → canRate: false   (trước bản sửa này: true — chính là defect §40)
+          POST /orders/{id}/ratings → 409 code=rating_blocked_by_report type=…/errors/rating_blocked_by_report
+          người chơi của cùng đơn → canRate false vì hasRated true (cô ấy là người đã đánh giá 4★ ở §35,
+          không phải vì luật mới)
+Gate  : BE tsc 0 · eslint 0 · unit 60/60 · **e2e 82/82 (10 suite)** · FE tsc 0 · lint 0 · jest 61/61
+```
+
+OpenAPI không đổi (`openapi.json` không liệt kê danh sách mã lỗi, hợp đồng response giữ nguyên) nên không cần
+chạy lại `npm run openapi:export` / `api:generate`.
+
+**Chưa quan sát lại trên màn hình**: nút "Đánh giá" biến mất với người đã tố. nguyên nhân là surface trình diễn
+của môi trường đo bị treo ngay sau phần kiểm sheet (§40) nên không bấm lại được. Đây là suy diễn từ một boolean:
+`canGiveRating = isHirer && order.canRate` — cùng điều kiện đã **được thấy hiện thật** trên màn hình (khi `canRate`
+true thì nút xuất hiện, §40) và API giờ trả false; không phải một lần bấm thật sau khi sửa.
+
+
+
+
 
