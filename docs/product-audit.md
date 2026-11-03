@@ -2436,11 +2436,63 @@ mục rỗng, và ba tiến trình dev đang chạy trên đó (API, Metro, Vite
 `GET http://localhost:3000/api/v2/health` → 200, `/docs` → 200. Muốn kiểm lockfile thì chạy thẳng `npm ci`;
 `--dry-run` không phải probe an toàn. Metro và Vite dev **chưa** bật lại (terminal của anh), nên trước khi test
 máy #122 anh chạy lại `npx expo start` (và `npm run dev` cho admin nếu cần).
+*Cập nhật sau đó*: Vite admin đã bật lại trên 5174 (200, đăng nhập admin + moderator đều thông); Metro web
+8081 tôi bật bằng tiến trình riêng, kèm `EXPO_PUBLIC_API_URL` của tiến trình đó — xem §37.
 
 **Chưa làm, có chủ đích**: chưa có test render component — muốn bắt được kiểu lỗi lệch ô input hay bàn phím thì
 cần thêm `@testing-library/react-native` + jest setup, và chỉ đáng làm khi một màn đổi hình dạng; chưa đặt
 coverage threshold; test chạy trên Node nên không đụng code native, nghĩa là các defect device-only (§25, #122)
 máy test không tự phát hiện.
+
+## 37. #6 — `player-list` chuyển từ bộ nhớ tạm sang `?source=`
+
+Màn "Xem tất cả" của năm rail khám phá trước đây nhận dữ liệu qua một module singleton
+(`playerListDraft.set(...)` rồi `take()`). §14/#117 mới vá được nửa đường: `take()` đọc-một-lần nên không còn
+render nhầm danh sách của rail khác, nhưng bản thân route vẫn **không tự chứa gì cả** — sao chép link, mở từ
+thông báo, hay app bị nạp lại đều ra "Danh sách chỉ hiện khi mở từ một mục trên trang Chủ", kể cả khi API đang
+trả về đúng dữ liệu đó.
+
+Giờ URL là nguồn sự thật: `/player-list?source=new-accounts|same-hobbies|top-rating|recent-orders|recommend`.
+
+- **Một bảng định nghĩa, dùng cho cả rail và màn danh sách** — `src/features/discovery/playerListSources.ts`:
+  mỗi nguồn có `title`, `queryKey` và `queryFn` của chính nó. Home không còn tự viết năm `useQuery` nữa mà gọi
+  `usePlayerListSource('new-accounts', …)`…, nên rail và màn "Xem tất cả" **buộc** phải trùng key và trùng
+  fetcher; trước đây hai chỗ này là hai đoạn code giống nhau và rất dễ sửa lệch một bên.
+- `recommend` vẫn cần năm id của rail top-rating làm seed, cả về key (`home.recommend(userId, ids)`) lẫn giới
+  hạn `pageSize`. Màn danh sách dựng lại đúng chuỗi đó: chạy `top-rating` (enabled chỉ khi `source=recommend`)
+  rồi mới gọi `recommendations/players?limit=<ids.length>` — và giữ nguyên điều kiện của Home là phải đăng
+  nhập + đủ 5 id, để link mở lạnh không phát một request mà Home không bao giờ phát.
+- Tiêu đề lấy từ bảng, nên nhãn rail và nhãn màn danh sách không thể lệch nhau nữa.
+- Xoá `playerListDraft.ts`; `README.md` ghi lại tham số của route.
+- **5 test mới** (`src/features/discovery/__tests__/playerListSources.spec.ts`, nâng tổng số lên 40): key của
+  từng nguồn phải `toEqual` đúng `queryKeys.home.*` (một key nào đó lệch đi là mở "Xem tất cả" âm thầm
+  thành request thứ hai cho cùng danh sách, và hai lần gọi có thể trả kết quả khác nhau), `noSource` không
+  được trùng với nguồn thật,
+  và `resolvePlayerListSource` từ chối `?source=bogus`, hoa/thường sai, cũng như dạng mảng `?source=a&source=b`.
+
+Kiểm chứng (Metro web, tài khoản `demo.hirer1`, API `192.168.1.9:3000`):
+
+```
+từ rail      : Home → "Xem tất cả" (rail đầu) → URL /player-list?source=new-accounts, tiêu đề
+               "Các người chơi mới", 5 thẻ người chơi
+mở lạnh      : nạp lại hẳn trang ở /player-list?source=top-rating (JS context mới, không còn gì trong bộ nhớ)
+               → tiêu đề "Top người chơi ưa thích" + 5 thẻ  〔trước đây: EmptyState "chỉ hiện khi mở từ trang Chủ"〕
+link lạ      : /player-list?source=bogus → "Danh sách người chơi" + hướng dẫn mở từ trang Chủ, không gọi API
+               nào cho danh sách
+chuỗi recommend: /player-list?source=recommend (mở lạnh) → network cho thấy đúng hai request theo thứ tự
+               GET /users?sort=rating&pageSize=5 → GET /recommendations/players?limit=5; tiêu đề
+               "Đề xuất cho bạn"; tài khoản này không có đề xuất nào nên màn hiện empty state thật, không treo
+quay lại     : nút "Quay lại" từ màn danh sách → /home
+gate         : tsc --noEmit 0 · expo lint 0 · jest 40/40
+```
+
+**Phát hiện ngoài lề, chặn cả lượt test điện thoại #122**: máy đã đổi IP LAN — `192.168.1.8` → **`192.168.1.9`**
+(`ipconfig`), trong khi `play-together-fe/.env` vẫn ghi `EXPO_PUBLIC_API_URL=http://192.168.1.8:3000/api/v2`.
+Hệ quả đo được: mọi request từ app treo bất định (`POST /auth/login` và các `OPTIONS` ở trạng thái pending mãi),
+không phải lỗi đăng nhập. API vẫn healthy trên `localhost:3000` và trên IP mới (`GET http://192.168.1.9:3000/api/v2/health`
+→ 200). Tôi **không** sửa `.env` của anh (file cấu hình local, và một IP hay đổi như thế này thì nên đặt IP tĩnh
+cho máy); toàn bộ kiểm chứng ở trên chạy với Metro mà tôi bật bằng `EXPO_PUBLIC_API_URL=http://192.168.1.9:3000/api/v2`
+trên tiến trình đó. Anh chỉ cần đổi một dòng trong `.env` rồi `npx expo start` lại là điện thoại dùng được tiếp.
 
 ## 38. #8 — số liệu hoàn thành theo ngày và theo tháng (endpoint mới + biểu đồ trong app)
 
@@ -2464,9 +2516,9 @@ trả `SessionStatsView` với `buckets[]` **oldest first**, mỗi ô gồm `buc
   `endedAt >= đầu cửa sổ`, rồi gom vào từng mốc ở JS. Không dùng `date_trunc(..., 'Asia/Ho_Chi_Minh')` vì DB dev là PGlite
   còn production là Postgres thật — hai bên không hứa như nhau về build ICU có những tên múi giờ nào; còn phép
   chia mốc lịch đã có sẵn trong `src/common/time` (`startOfDayInZone`) và có test.
-- Helper mới trong `src/common/time/time.ts`: `startOfMonthInZone` và `periodStartsInZone`. Each start is derived
-  from a point *inside* its period instead of by subtracting a fixed span from a boundary — a period is not a
-  fixed number of milliseconds once a timezone observes DST, and months probe mid-month for the same reason.
+- Helper mới trong `src/common/time/time.ts`: `startOfMonthInZone` và `periodStartsInZone`. Mỗi mốc được suy
+  ra từ một điểm nằm *giữa* kỳ thay vì trừ một khoảng cố định khỏi biên — vì một kỳ không còn là số
+  millisecond cố định khi múi giờ có DST, và tháng phải thăm giữa tháng cũng vì lý do đó.
 - Không có phiên nào bị âm thầm bỏ: cả hai bước chuyển sang trạng thái khép đều đóng dấu `endedAt`
   (`orders.service.ts:611` cho `ENDED_EARLY`, `:930` cho `SETTLED`), đã kiểm trong code chứ không giả định.
 
@@ -2514,70 +2566,67 @@ mười ba cột đáy — đó là dữ liệu thật, không phải placeholde
 hoặc test trên máy với vài phiên thật.
 
 
-## 37. #6 — `player-list` chuyển từ bộ nhớ tạm sang `?source=`
+## 39. #7 — Google sign-in trên máy thật: đào tới tận nguồn, và một quyết định còn thiếu
 
-Màn "Xem tất cả" của năm rail khám phá trước đây nhận dữ liệu qua một module singleton
-(`playerListDraft.set(...)` rồi `take()`). §14/#117 mới vá được nửa đường: `take()` đọc-một-lần nên không còn
-render nhầm danh sách của rail khác, nhưng bản thân route vẫn **không tự chứa gì cả** — sao chép link, mở từ
-thông báo, hay app bị nạp lại đều ra "Danh sách chỉ hiện khi mở từ một mục trên trang Chủ", kể cả khi API đang
-trả về đúng dữ liệu đó.
+Câu hỏi đặt ra là "cần cung cấp gì để đăng nhập Google chạy được trên bản dựng thật". Trước khi trả lời,
+tôi đọc **code đang cài** thay vì nhớ lại hướng dẫn cũ — và hoá ra tài liệu trong repo (`docs/google-signin.md`,
+mục 5) đang hứa sai.
 
-Giờ URL là nguồn sự thật: `/player-list?source=new-accounts|same-hobbies|top-rating|recent-orders|recommend`.
+**Bốn sự thật đo được, không suy đoán**:
 
-- **Một bảng định nghĩa, dùng cho cả rail và màn danh sách** — `src/features/discovery/playerListSources.ts`:
-  mỗi nguồn có `title`, `queryKey` và `queryFn` của chính nó. Home không còn tự viết năm `useQuery` nữa mà gọi
-  `usePlayerListSource('new-accounts', …)`…, nên rail và màn "Xem tất cả" **buộc** phải trùng key và trùng
-  fetcher; trước đây hai chỗ này là hai đoạn code giống nhau và rất dễ sửa lệch một bên.
-- `recommend` vẫn cần năm id của rail top-rating làm seed, cả về key (`home.recommend(userId, ids)`) lẫn giới
-  hạn `pageSize`. Màn danh sách dựng lại đúng chuỗi đó: chạy `top-rating` (enabled chỉ khi `source=recommend`)
-  rồi mới gọi `recommendations/players?limit=<ids.length>` — và giữ nguyên điều kiện của Home là phải đăng
-  nhập + đủ 5 id, để link mở lạnh không phát một request mà Home không bao giờ phát.
-- Tiêu đề lấy từ bảng, nên nhãn rail và nhãn màn danh sách không thể lệch nhau nữa.
-- Xoá `playerListDraft.ts`; `README.md` ghi lại tham số của route.
-- **5 test mới** (`src/features/discovery/__tests__/playerListSources.spec.ts`, nâng tổng số lên 40): key của
-  từng nguồn phải `toEqual` đúng `queryKeys.home.*` (if a key ever stops matching, opening "Xem tất cả" quietly
-  becomes a second request for a list that may come back different), `noSource` không được trùng với nguồn thật,
-  và `resolvePlayerListSource` từ chối `?source=bogus`, hoa/thường sai, cũng như dạng mảng `?source=a&source=b`.
+1. `Google.useIdTokenAuthRequest` chỉ xin `id_token` trực tiếp **khi `Platform.OS === 'web'`**. Trên Android/iOS
+   nó truyền `responseType: undefined` cho `useAuthRequest`, và hàm đó tự chọn `ResponseType.Code` ("installed
+   apps can auto exchange") với redirect mặc định `<applicationId>:/oauthredirect`. Trích trong
+   `node_modules/expo-auth-session/build/providers/google.js`.
+2. Luồng code đó sau khi nhận `?code=` sẽ tự đổi code ở `https://oauth2.googleapis.com/token` **với
+   `clientSecret: undefined`** (cùng file, `AccessTokenRequest`). Client loại *Web application* bắt buộc secret
+   → `invalid_client`; mà secret thì không đời nào được nhúng vào app. Custom scheme cũng không phải redirect URI
+   Google chấp nhận cho client Web. Tức là con đường "thêm `com.playtogether.app:/oauthredirect` vào client Web"
+   mà mục 5 cũ ghi là ✅ **không tồn tại** — đã sửa lại trong `docs/google-signin.md`.
+3. `expo-auth-session@58.0.14` không còn chứa thư viện Google native nào: `package.json` chỉ có
+   expo-application / constants / crypto / linking / web-browser, không có `ios/`, `android/`, không có config
+   plugin; và `GoogleAuthRequestConfig` bị đánh dấu `@deprecated` trỏ tới `guides/google-authentication`. Guide
+   đó (sửa ngày 02/11/2026) bảo dùng `@react-native-google-signin/google-signin` (17.0.0) hoặc
+   `react-native-nitro-google-signin` (2.3.1), và nói rõ **Expo Go không dùng được**.
+4. Phía API **đã sẵn** cho client native: `google-auth.service.ts:29-34` gom `GOOGLE_CLIENT_ID` +
+   `GOOGLE_ANDROID_CLIENT_ID` + `GOOGLE_IOS_CLIENT_ID` thành danh sách audience, `verifyIdToken({ audience })`
+   nhận cả mảng — nên thêm client Android chỉ là thêm biến env, không sửa code.
 
-Kiểm chứng (Metro web, tài khoản `demo.hirer1`, API `192.168.1.9:3000`):
+**Đã chốt trong repo (không cần quyết định nào của anh)**:
 
-```
-từ rail      : Home → "Xem tất cả" (rail đầu) → URL /player-list?source=new-accounts, tiêu đề
-               "Các người chơi mới", 5 thẻ người chơi
-mở lạnh      : nạp lại hẳn trang ở /player-list?source=top-rating (JS context mới, không còn gì trong bộ nhớ)
-               → tiêu đề "Top người chơi ưa thích" + 5 thẻ  〔trước đây: EmptyState "chỉ hiện khi mở từ trang Chủ"〕
-link lạ      : /player-list?source=bogus → "Danh sách người chơi" + hướng dẫn mở từ trang Chủ, không gọi API
-               nào cho danh sách
-chuỗi recommend: /player-list?source=recommend (mở lạnh) → network cho thấy đúng hai request theo thứ tự
-               GET /users?sort=rating&pageSize=5 → GET /recommendations/players?limit=5; tiêu đề
-               "Đề xuất cho bạn"; tài khoản này không có đề xuất nào nên màn hiện empty state thật, không treo
-quay lại     : nút "Quay lại" từ màn danh sách → /home
-gate         : tsc --noEmit 0 · expo lint 0 · jest 40/40
-```
+- `play-together-fe/eas.json` — 4 profile dev/preview/production để dựng development build; `expo config
+  --type introspect` chạy sạch với `app.json` hiện tại (0 lỗi).
+- Nút Google không còn chết âm thầm: khi Google trả lỗi, toast nói **lý do** thay vì "Đăng nhập Google thất bại".
+  `src/features/auth/googleFailureMessage.ts` (thuần, không import Expo nên jest chạy được trên Node) map 11 mã
+  OAuth sang tiếng Việt, mã lạ thì giữ nguyên mã + mô tả của Google và cắt ở 140 ký tự vì toast tự ẩn sau 2,6 s.
+  9 ca test mới → **61/61 FE pass**, `tsc --noEmit` 0, `expo lint` 0.
+- `README.md` của app: bỏ câu "mọi module native đều có trong Expo Go nên demo không cần development build" —
+  đúng với cả app trừ Google trên máy; viết lại đoạn Google (trước đây bắt biến `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
+  /`_ANDROID_` dù code không đọc hai biến đó). `.env.example` cũng nói thẳng: browser OK, Expo Go không bao giờ,
+  máy thật cần một trong hai con đường.
+- `docs/google-signin.md` mục 6 viết lại thành **6.A / 6.B / 6.C**.
 
-**Phát hiện ngoài lề, chặn cả lượt test điện thoại #122**: máy đã đổi IP LAN — `192.168.1.8` → **`192.168.1.9`**
-(`ipconfig`), trong khi `play-together-fe/.env` vẫn ghi `EXPO_PUBLIC_API_URL=http://192.168.1.8:3000/api/v2`.
-Hệ quả đo được: mọi request từ app treo bất định (`POST /auth/login` và các `OPTIONS` ở trạng thái pending mãi),
-không phải lỗi đăng nhập. API vẫn healthy trên `localhost:3000` và trên IP mới (`GET http://192.168.1.9:3000/api/v2/health`
-→ 200). Tôi **không** sửa `.env` của anh (file cấu hình local, và một IP hay đổi như thế này thì nên đặt IP tĩnh
-cho máy); toàn bộ kiểm chứng ở trên chạy với Metro mà tôi bật bằng `EXPO_PUBLIC_API_URL=http://192.168.1.9:3000/api/v2`
-trên tiến trình đó. Anh chỉ cần đổi một dòng trong `.env` rồi `npx expo start` lại là điện thoại dùng được tiếp.
+**Quyết định còn thiếu, và vì sao tôi chưa tự làm**: hai con đường trên máy đều cần development build, nhưng chỉ
+6.A phải trả thêm một học phí rất cụ thể — thêm native code nghĩa là **Expo Go không nạp nổi app nữa**, kể cả các
+màn không liên quan tới Google (import thất bại là crash cả màn đăng nhập). đúng lúc lượt test bàn phím #122 trên
+máy đang chờ. Nên tôi dừng ở bước chuẩn bị, không `npx expo install` gì cả.
 
+| | 6.A — lib Google native | 6.B — client Android + `expo-auth-session` |
+| --- | --- | --- |
+| Phụ thuộc mới | 1 lib native (+ config plugin) | không |
+| Expo Go sau khi làm | **hết dùng được, toàn app** | vẫn dùng được cho mọi thứ khác |
+| API | không đổi (`serverClientId` = client Web cũ) | thêm `GOOGLE_ANDROID_CLIENT_ID` |
+| App | tách nhánh theo `Platform.OS`, web vẫn dùng hook cũ | thêm `androidClientId` + `redirectUri` dạng `com.googleusercontent.apps.<id>:/oauth2redirect`, khai scheme đó trong `app.json` |
+| Trải nghiệm | nút Google thật của hệ điều hành | vẫn mở trình duyệt |
+| Rủi ro | Expo Guide đang khuyến nghị, nhưng phải dựng bản dev để test | đi trên đường ray Expo đã đánh dấu `@deprecated` |
 
+**Chỉ anh làm được** (chi tiết ở `docs/google-signin.md` §6.C): `npx eas-cli login` + `eas init` (tài khoản
+expo.dev — hiện `npx eas-cli whoami` báo *Not logged in*, `app.json` chưa có `extra.eas.projectId`), tạo OAuth
+client **Android** (package `com.playtogether.app` + SHA-1 của keystore mà bản dựng dùng, lấy từ
+`npx eas-cli credentials`), tuỳ chọn client **iOS** (cần tài khoản Apple Developer), rồi điền client ID vào
+`.env` của app và của API rồi khởi động lại cả hai. Client ID không phải bí mật; **client secret** thì có — không
+đưa vào app, không commit.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+**Việc còn treo không phải do Google**: `play-together-fe/.env` vẫn giữ IP LAN cũ `192.168.1.8` trong khi máy đã
+sang `192.168.1.9` (§37) — đổi một dòng đó là #122 test được tiếp.
 

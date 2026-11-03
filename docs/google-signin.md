@@ -107,29 +107,77 @@ Không cấu hình thì nút Google vẫn hiện, chỉ toast nhắc "Chưa cấ
 | --- | --- | --- |
 | Web (`http://localhost:8081`) | ✅ ngay sau khi làm mục 2–4 | đường test nhanh nhất |
 | **Expo Go** trên điện thoại | ❌ | redirect URI trong Expo Go là `exp://192.168.1.20:8081/--/`; Google không cho đăng ký scheme lạ ở client Web, nên bấm nút sẽ rơi vào trang lỗi của Google. Đây là giới hạn của Expo Go, không phải bug của app. |
-| **Development build** trên điện thoại | ✅ sau khi build bản dev | `expo-auth-session` lúc này dùng `com.playtogether.app:/oauthredirect`; thêm chuỗi đó vào *Authorized redirect URIs* của client Web. Máy này chưa có JDK/Android SDK, nên build bằng EAS: `npx eas-cli build --profile development -p android` (hoặc cài Android Studio + JDK 17 rồi `npx expo run:android`). |
+| **Development build** trên điện thoại | ❌ vẫn chưa, với client Web hiện tại | Xem mục 6 — cần chọn một trong hai con đường. Lý do: trên máy, `useIdTokenAuthRequest` **không** xin `id_token` trực tiếp nữa mà tự chuyển sang luồng authorization-code với redirect mặc định `com.playtogether.app:/oauthredirect` (đọc trực tiếp trong `node_modules/expo-auth-session/build/providers/google.js`, hàm `useAuthRequest`). Client loại **Web application** chết ở cả hai chắn: Google không nhận custom scheme làm redirect URI của client Web, và bước đổi code bắt buộc kèm client secret mà app installed app không được phép chứa. |
 
-Nếu Google không cho lưu redirect URI dạng custom scheme, hoặc bạn muốn trải nghiệm
-"nút Google" đúng bản native (đệm đăng nhập của hệ điều hành, không mở trình duyệt), thì
-dùng thư viện native thay cho `expo-auth-session` — xem mục 6.
+## 6. Chạy trên máy thật — hai con đường, cần một quyết định
 
-## 6. Client ID Android / iOS (chỉ khi dùng thư viện native)
+Điểm chung cả hai: **Expo Go không bao giờ chạy được** (mục 5), và đều cần một *development
+build* do chính tay bạn dựng, vì nó đòi tài khoản Expo và quyền sửa project Google Cloud.
+`eas.json` đã nằm trong repo với bốn profile: `development` (dev client — APK Android / app simulator
+iOS), `development-device` (dev client dựng cho máy thật iOS), `preview` (APK nội bộ chia tay ngắn
+hạn), `production` (bản submit store).
 
-Làm thêm **một client ID cho mỗi nền tảng** trong cùng project:
+```bash
+cd play-together-fe
+npx eas-cli login          # tài khoản expo.dev của bạn
+npx eas-cli init           # ghi extra.eas.projectId vào app.json
+npx eas-cli build --profile development --platform android
+npx expo start --dev-client
+```
 
-- **Android**: Application type *Android*, Package name `com.playtogether.app`
-  (theo `app.json` → `android.package`), SHA-1 của keystore bạn build bằng.
-  SHA-1 debug: `keytool -list -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -storepass android`
-  hoặc `npx eas-cli credentials` nếu build trên EAS.
-- **iOS**: Application type *iOS*, Bundle ID `com.playtogether.app`
-  (theo `app.json` → `ios.bundleIdentifier`).
+### 6.A. Thêm thư viện Google native — cách Expo hướng dẫn (guide ngày 02/11/2026)
 
-Điền client ID của hai bản này vào API (`GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`)
-để API còn chấp nhận token do chúng xin. App **vẫn** xin token bằng client Web.
+`docs.expo.dev/guides/google-authentication/` không còn hướng dẫn dùng `expo-auth-session` cho
+Google nữa; trang đó (và chú thích `@deprecated` trên `GoogleAuthRequestConfig` của bản
+`expo-auth-session@58.0.14` đang cài) trỏ sang một trong hai thư viện có native code:
 
-Thư viện native tham khảo: `@react-native-google-signin/google-signin` (Android Credential
-Manager + GoogleSignIn cho iOS). Lưu ý nó có native code nên **Expo Go sẽ không chạy được app
-nữa** — chỉ thêm khi bạn đã làm dev build.
+| Thư viện | Bản mới nhất | ghi chú |
+| --- | --- | --- |
+| `@react-native-google-signin/google-signin` | 17.0.0 | phổ biến nhất; Android Credential Manager nằm trong gói trả phí |
+| `react-native-nitro-google-signin` | 2.3.1 | dùng API Android Credential Manager miễn phí; dựa trên Nitro Modules |
+
+Cả hai đều xin id_token bằng `serverClientId` = **client Web đang dùng hôm nay**, nên token vẫn
+đúng `aud` và **API không phải đổi gì**. Web (`react-native-web`) vẫn đi `expo-auth-session` như cũ
+vì hai thư viện kia không chạy trên trình duyệt — nghĩa là `GoogleLoginButton` sẽ tách thành hai
+nhánh theo `Platform.OS`.
+
+**Học phí phải trả**: native code mới đồng nghĩa Expo Go không nạp được app nữa (kể cả các màn không
+liên quan tới Google — import thất bại là crash cả màn hình đăng nhập). Mọi lượt test máy từ nay phải
+đi qua dev build. Đây là lý do tôi **chưa** cài: nó chặn đúng lượt test bàn phím #122 đang chờ.
+
+### 6.B. Giữ nguyên `expo-auth-session`, xin token bằng client Android (không thêm dependency)
+
+`useAuthRequest` đã hỗ trợ sẵn: trên Android nó dùng `androidClientId` (nếu có) và luồng code + PKCE,
+rồi tự đổi code lấy `id_token` (`fullResult.params.id_token`). Việc còn lại là khai báo đúng client:
+
+1. Google Cloud → *Create Client* → **Application type: Android**, Package name
+   `com.playtogether.app` (`app.json` → `android.package`) + **SHA-1 của keystore mà bản dựng dùng**.
+   Build bằng EAS thì lấy SHA-1 ở `npx eas-cli credentials` (hoặc Play Console → Release → Setup →
+   App Integrity).
+2. App truyền `androidClientId` và `redirectUri` đúng dạng Google buộc dùng cho installed app —
+   `com.googleusercontent.apps.<client-ID>:/oauth2redirect` — và khai scheme đó cho native app
+   (`app.json` → `scheme` chấp nhận mảng, giữ thêm `playtogether` cho deep-link của router).
+3. API: thêm `GOOGLE_ANDROID_CLIENT_ID=<client Android>` vào `.env` — `GoogleAuthService` đã nhận
+   danh sách audience sẵn (`src/modules/auth/google-auth.service.ts:29-34`), không sửa code.
+
+Chi phí: ít hơn 6.A (một file app + hai biến env), Expo Go còn dùng được cho mọi thứ khác, nhưng vẫn
+phải dev build cho riêng Google, và nó đi trên con đường mà Expo đã đánh dấu `@deprecated`. iOS
+cần thêm một client *iOS* (Bundle ID `com.playtogether.app`) và tài khoản Apple Developer.
+
+### 6.C. Những việc chỉ chủ tài khoản làm được
+
+| Việc | Ở đâu | Vì sao tôi không tự làm |
+| --- | --- | --- |
+| `eas login` + `eas init` | expo.dev | cần tài khoản và quyền thanh toán của bạn |
+| Create OAuth client **Android** (+ **iOS** nếu cần) | Google Cloud Console | project Google của bạn, tôi không có quyền sửa |
+| Lấy SHA-1 từ bản dựng và dán vào client Android | `npx eas-cli credentials` | chỉ tồn tại sau lần build đầu |
+| Điền `EXPO_PUBLIC_GOOGLE_*` vào `play-together-fe/.env`, `GOOGLE_ANDROID_CLIENT_ID`/`_IOS_` vào `play-together-be/.env` | máy bạn | file env local, không commit |
+| Bật lại Metro/API sau khi đổi env | máy bạn | biến `EXPO_PUBLIC_*` bị nhúng vào bundle lúc khởi động |
+| Chọn 6.A hay 6.B (+ Android thôi hay cả iOS) | quyết định sản phẩm | 6.A đổi luôn cách test máy của cả app |
+
+Client ID **không** phải bí mật (nó hiện ra trong bundle), nên việc điền vào `.env` là an toàn; điều
+kiêng tuyệt đối là **client secret** — không đưa vào app, không commit, không gửi trong chat.
+
 
 ## 7. Tài khoản Google rồi mới đặt mật khẩu
 
