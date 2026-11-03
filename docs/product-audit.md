@@ -1992,6 +1992,10 @@ CI không lẫn vào repo. `EXPO_PUBLIC_API_URL` thiếu trong CI cũng không l
 - Bàn phím là câu chuyện của thiết bị thật: ở đây không tạo được bàn phím ảo, nên mới chứng minh được **bố
   cục không vỡ** và **iOS sẽ có chỗ thở**, chưa chứng minh được cảm giác gõ trên Android. Cần anh bật bàn
   phím ở `/filter`, `/manage-hiring` và một màn đăng nhập rồi chụp.
+  **→ ĐÃ XONG trên máy thật (04/11/2026, #122)**, qua Expo Go với Metro bind LAN (`exp://192.168.1.9:8081`) —
+  anh xác nhận cả 5 màn mục #119, không còn khoảng trắng thừa ở `(auth)` và `/personal-change-password`.
+  Lượt này cũng lộ một cái bẫy môi trường đáng nhớ: Metro cũ chỉ bind `[::]:8081` nên máy tính gọi
+  `localhost:8081` vẫn 200 mà điện thoại thì treo vô thời hạn — symptom giống hệt "API chết".
 - Hai file workflow mới nằm trong `.github/workflows/`: đã đẩy thành công (FE `5416abb`), GitHub Actions
   accept cả hai — không cần thêm scope nào cho PAT hiện tại.
 - Vài màn có input vẫn dùng `ScrollView` thường mà không bọc KAV nhưng ô nhập của chúng nằm sát thanh tiêu
@@ -2640,4 +2644,69 @@ bị thu…) mới đi qua hàm map này. Ghi lại để lần sau đừng tín
 
 **Việc còn treo không phải do Google**: `play-together-fe/.env` vẫn giữ IP LAN cũ `192.168.1.8` trong khi máy đã
 sang `192.168.1.9` (§37) — đổi một dòng đó là #122 test được tiếp.
+
+
+## 40. C2 — màn Đánh giá thành lớp phủ trong `end-order`, và một defect BE lộ ra khi test nó
+
+#122 đã xác nhận trên máy thật (§28), nên C2 — món cuối của §23 nhóm C — được thi công.
+
+**Đã làm**: xoá hẳn route `src/app/rating/[orderId].tsx` (inbound duy nhất là `router.replace` từ `end-order`,
+đã kiểm bằng grep trên cả ba repo: không notification deep-link nào trỏ vào đó). Form chuyển thành
+`src/components/orders/RatingSheet.tsx` — `Modal` + `KeyboardAvoidingView` (`padding` riêng iOS, giống
+`CancelOrderDialog` đang dùng), kéo từ đáy lên, nền `colors.overlay`, đóng bằng chạm nền / nút ✕ / `onRequestClose`.
+`end-order` giữ nguyên mọi thứ nó đã có: vẫn `refetchInterval: 10_000`, vẫn `!canRate` → không hiện CTA, vẫn có
+nhánh EmptyState trong sheet cho ca polling lật `canRate` thành false *khi sheet đang mở*.
+
+**Lý do bỏ luôn nút tố cáo ở đầu màn đánh giá cũ**: màn đó hiển thị nút báo cáo vô điều kiện, còn `end-order` chỉ
+hiện khi `isFeedbackOpenOrder` (đơn `DISPUTED`/`SETTLED`/`ENDED_EARLY`). Một đơn cho phép đánh giá thì luôn ở trạng
+thái khép, nên điều kiện của `end-order` rộng bằng — không mất entry point nào; `end-order` còn giữ cả ô "Có vấn đề"
+trong footer khi chờ đối soát.
+
+Kiểm chứng bằng Metro web trong iframe cùng gốc 375×740 (đăng nhập `demo.player1`, đơn `fd8fe34f…`):
+
+```
+CTA        : "Đánh giá" (aria-label + nhãn) hiện ở footer end-order, cao 50px
+Bấm CTA    : sheet mở, tiêu đề "Đánh giá người chơi", đủ 5 nút "Đánh giá N sao"
+Bố cục 375 : sheet y=167..740, cao 573 (max-height 92% = 680, không tràn)
+             sao kết thúc y=468 · ô nhập 484..644 (rộng 343, cao 160) · nút "Gửi" 668..724 (< 740, không phải cuộn)
+             scrollWidth tài liệu = 375 → không vỡ ngang
+Validate   : bấm "Gửi" khi chưa chọn sao → toast "Vui lòng đánh giá!" (giữ nguyên copy cũ)
+Chọn sao   : nhãn tổng kết đổi thành "5.0 trên 5 sao" → state ăn thật
+Polling    : network log trong lúc sheet mở cho thấy GET /orders/{id} lặp lại nhiều lần cách nhau 10s →
+             lớp phủ KHÔNG chặn nhịp đối soát của màn dưới
+```
+
+**Ba thứ phải ghi lại để lần sau khỏi hiểu nhầm số liệu**:
+- Surface của app dựng hình ở đây báo `viewport = 0x0` và `visibilityState = hidden`, nên **animation
+  `slide` của Modal không chạy**: wrapper bị đóng băng ở `transform: matrix(...,0,740)`, nghĩa là sheet nằm
+  hoàn toàn dưới mép màn hình. Đó là giả tạo của môi trường đo, không phải lỗi layout; muốn đo hình học thì
+  tạm đặt `transform: none` rồi đo (số liệu ở trên lấy sau bước này).
+- Toast tự ẩn sau 2,6s, còn mỗi lần gọi MCP tốn ~1s, nên "chờ rồi đọc toast" dễ trượt. Muốn chắc thì đọc
+  `list_network_requests` hoặc bắt trạng thái ngay trong cùng một script.
+- `performance.getEntriesByType('resource')` không liệt kê request còn pending; network log của MCP mới là
+  chỗ thấy request thật.
+
+**Defect lộ ra khi test (chính là #124, và nó không phải chuyện câu chữ)**: lần bấm "Gửi" có đủ sao + lời nhắn
+bị server từ chối —
+
+```
+POST /api/v2/orders/fd8fe34f…/ratings → 409 application/problem+json
+  code   : conflict
+  detail : "You already reported the other party on this order, so you cannot rate it"
+```
+
+Trong khi cùng đơn đó, `GET /orders/fd8fe34f…` vẫn trả `canRate: true, hasRated: false`. Lý do ở code:
+`orders.service.ts:1248` tính `canRate = isParticipant && FEEDBACK_STATUSES && withinWindow && !ratedSet`,
+còn `ratings.service.ts:75-86` **chặn thêm** "đã tố cáo trong đơn này". Lá chắn của POST vì vậy chặt hơn cờ mà
+GET quảng bá: app hiển thị một nút mà mọi lần bấm đều 409, và toast chỉ dịch được "Thao tác xung đột với trạng
+thái hiện tại." vì code lỗi là `conflict` chung. Ghi nhận riêng: `canRate` còn dùng `endedAt` trong khi POST dùng
+`endedAt ?? scheduledEndAt` — lệch thứ hai, ít gặp hơn nhưng cũng là hai quy tắc khác nhau.
+
+**Chưa kiểm chứng**: nhánh `!canRate` bên trong sheet. Sau khi sửa #124 thì đúng đơn này sẽ thành `canRate: false`
+nên càng không có đường bấm tới đó; nó chỉ tới được bằng race (polling lật cờ khi sheet đang mở), chưa tái tạo.
+
+**Gate**: `tsc --noEmit` 0 · `expo lint` 0 · jest 61/61 (không đổi — không có test nào import màn rating) ·
+`expo export --platform web` 0.
+
+
 
