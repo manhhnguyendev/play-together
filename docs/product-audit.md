@@ -2595,11 +2595,15 @@ mục 5) đang hứa sai.
 **Đã chốt trong repo (không cần quyết định nào của anh)**:
 
 - `play-together-fe/eas.json` — 4 profile dev/preview/production để dựng development build; `expo config
-  --type introspect` chạy sạch với `app.json` hiện tại (0 lỗi).
+  --type introspect` chạy sạch với `app.json` hiện tại (exit 0). **Chưa** cài `expo-dev-client`: docs Expo
+  (03/11/2026) nói từ lúc có nó thì `npx expo start` nhắm development build thay vì Expo Go, tức đổi luôn cách
+  anh chạy #122. Lệnh cài đã ghi ở đầu mục 6 `docs/google-signin.md`, kèm `-g` cho ai vẫn muốn Expo Go.
 - Nút Google không còn chết âm thầm: khi Google trả lỗi, toast nói **lý do** thay vì "Đăng nhập Google thất bại".
   `src/features/auth/googleFailureMessage.ts` (thuần, không import Expo nên jest chạy được trên Node) map 11 mã
   OAuth sang tiếng Việt, mã lạ thì giữ nguyên mã + mô tả của Google và cắt ở 140 ký tự vì toast tự ẩn sau 2,6 s.
-  9 ca test mới → **61/61 FE pass**, `tsc --noEmit` 0, `expo lint` 0.
+  9 ca test mới → **61/61 FE pass**, `tsc --noEmit` 0, `expo lint` 0, `expo export --platform web` 0 và
+  CI trên GitHub `success` với commit `630741b`. Bằng chứng nó thật sự nằm trong màn hình: chuỗi tiếng Việt
+  mới xuất hiện đúng một lần, trong `dist/_expo/static/js/web/login-*.js` — các chunk route khác 0.
 - `README.md` của app: bỏ câu "mọi module native đều có trong Expo Go nên demo không cần development build" —
   đúng với cả app trừ Google trên máy; viết lại đoạn Google (trước đây bắt biến `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
   /`_ANDROID_` dù code không đọc hai biến đó). `.env.example` cũng nói thẳng: browser OK, Expo Go không bao giờ,
@@ -2608,7 +2612,7 @@ mục 5) đang hứa sai.
 
 **Quyết định còn thiếu, và vì sao tôi chưa tự làm**: hai con đường trên máy đều cần development build, nhưng chỉ
 6.A phải trả thêm một học phí rất cụ thể — thêm native code nghĩa là **Expo Go không nạp nổi app nữa**, kể cả các
-màn không liên quan tới Google (import thất bại là crash cả màn đăng nhập). đúng lúc lượt test bàn phím #122 trên
+màn không liên quan tới Google (import thất bại là crash cả màn đăng nhập) — đúng lúc lượt test bàn phím #122 trên
 máy đang chờ. Nên tôi dừng ở bước chuẩn bị, không `npx expo install` gì cả.
 
 | | 6.A — lib Google native | 6.B — client Android + `expo-auth-session` |
@@ -2626,6 +2630,13 @@ client **Android** (package `com.playtogether.app` + SHA-1 của keystore mà b�
 `npx eas-cli credentials`), tuỳ chọn client **iOS** (cần tài khoản Apple Developer), rồi điền client ID vào
 `.env` của app và của API rồi khởi động lại cả hai. Client ID không phải bí mật; **client secret** thì có — không
 đưa vào app, không commit.
+
+**Chưa có bằng chứng đầu-cuối cho chính cái toast**: unit test khoá bảng map, bundle proof khoá việc nó nằm
+trong chunk `login`, nhưng chưa lần nào thấy dòng chữ mới hiện trên màn hình. Lý do không phải thiếu cố gắng:
+với lỗi ngay từ bước xin authorization (redirect URI không hợp lệ, client sai loại), Google hiển thị trang lỗi
+**ngay trong popup** chứ không quay lại app, nên `response` của hook vẫn null và app không có gì để toast. Muốn
+thấy câu chữ thật thì phải ở lượt dựng máy (6.A/6.B) — lúc đó các lỗi trả về kèm redirect (mã code hỏng, grant
+bị thu…) mới đi qua hàm map này. Ghi lại để lần sau đừng tính đây là "đã test xong".
 
 **Việc còn treo không phải do Google**: `play-together-fe/.env` vẫn giữ IP LAN cũ `192.168.1.8` trong khi máy đã
 sang `192.168.1.9` (§37) — đổi một dòng đó là #122 test được tiếp.

@@ -119,11 +119,17 @@ hạn), `production` (bản submit store).
 
 ```bash
 cd play-together-fe
-npx eas-cli login          # tài khoản expo.dev của bạn
-npx eas-cli init           # ghi extra.eas.projectId vào app.json
+npx expo install expo-dev-client   # profile "development" cần nó (docs Expo, 03/11/2026)
+npx eas-cli login                  # tài khoản expo.dev của bạn
+npx eas-cli init                   # ghi extra.eas.projectId vào app.json
 npx eas-cli build --profile development --platform android
-npx expo start --dev-client
+npx expo start --dev-client        # hoặc --go nếu vẫn muốn chạy Expo Go
 ```
+
+Chú ý cho đúng một hệ quả: docs Expo (sửa ngày 03/11/2026) ghi *"`npx expo start`, vì project đã có
+`expo-dev-client` nên lệnh này nhắm development build thay vì Expo Go*. Muốn tiếp tục chạy Expo Go cho
+những màn không liên quan tới Google thì thêm `-g` — `npx expo start --help` của bản này có đủ
+`-d, --dev-client` và `-g, --go`.
 
 ### 6.A. Thêm thư viện Google native — cách Expo hướng dẫn (guide ngày 02/11/2026)
 
