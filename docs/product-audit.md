@@ -2704,6 +2704,9 @@ thái hiện tại." vì code lỗi là `conflict` chung. Ghi nhận riêng: `ca
 
 **Chưa kiểm chứng**: nhánh `!canRate` bên trong sheet. Sau khi sửa #124 thì đúng đơn này sẽ thành `canRate: false`
 nên càng không có đường bấm tới đó; nó chỉ tới được bằng race (polling lật cờ khi sheet đang mở), chưa tái tạo.
+Đường **thành công** của sheet cũng mới chạy tới POST: lần bấm "Gửi" thật trong lượt này gặp 409 (defect §41), nên
+`onDismiss` + `onRated()` chưa được thấy trên màn hình. Cả hai chỉ là đóng overlay và gọi lại một query đã có, nhưng
+đừng ghi là "đã test xong".
 
 **Gate**: `tsc --noEmit` 0 · `expo lint` 0 · jest 61/61 (không đổi — không có test nào import màn rating) ·
 `expo export --platform web` 0.
