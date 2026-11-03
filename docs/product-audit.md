@@ -2356,6 +2356,92 @@ sau (trước đây DB seed không có đơn nào).
 Nhóm C2 (`rating/[orderId]` → lớp phủ trong `end-order`) vẫn gác: màn đó có polling 10s và hai effect tự
 điều hướng, để sau lượt test điện thoại. §23 coi như khép ở nhóm A–F.
 
+## 36. Cắm máy test cho FE và admin — và một nhãn phí làm tròn lệch tiền
+
+BE đã có jest từ đầu (`src/common/money/money.spec.ts`…); hai repo client thì không, cổng duy nhất là
+typecheck + lint + build. Từ mục này mỗi repo client đều có test và test đó chạy trong CI.
+
+**FE — jest-expo, làm theo tài liệu chính thức của Expo SDK 58.** AGENTS.md bắt buộc đọc docs trước khi đụng
+API Expo, nên tôi lấy `https://docs.expo.dev/llms.txt` rồi trang `develop/unit-testing.md`; trang
+`versions/v58.0.0/sdk/test/` mà trí nhớ model hay đoán **404 — không tồn tại**. Lệnh cài đúng của Expo:
+
+```
+npx expo install jest-expo jest @types/jest --dev   → jest ~30.5.2, jest-expo ~58.0.13
+```
+
+(SDK 58 trở đi yêu cầu Jest 30 — nằm trong chính trang docs đó, không phải mặc định từ training data.)
+
+- `jest.config.js`: `preset: 'jest-expo'` và `moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' }`.
+  jest-expo tự khai báo `resolver` riêng, nên tôi không *đoán* là `moduleNameMapper` vẫn ăn — bằng chứng là
+  4 file test đều import bằng `@/…` và pass hết.
+- `tsconfig.json` thêm `"types": ["jest", "node"]`. Thiếu nó `tsc --noEmit` báo `Cannot find name 'describe'`
+  trong khi jest vẫn chạy bình thường — hai bộ máy đọc cấu hình khác nhau.
+- script: `test` = `jest --runInBand`, `test:watch` = `jest --watch`.
+
+Bốn file, 35 test, toàn hàm thuần (chưa test render — xem "chưa làm" cuối mục):
+
+- `src/theme/__tests__/responsive.spec.ts` (8) — biên breakpoint, gutter, clamp của `fontScale`; **ca bug §25**
+  `gridItemWidth(375, 160, 10) === 166` (nếu làm tròn lên 167.67 thì hàng 343.33 chui trong hộp 343px và lưới
+  gộp thành 1 cột), cộng một bất biến quét 8 chiều rộng màn (320→428) × 3 cặp `(minCard, gap)`:
+  `cols * item + (cols - 1) * gap <= width - 2 * gutter`.
+- `src/api/v2/__tests__/mappers.spec.ts` (8) — đẳng thức tiền `available + pending = total` và phép trừ khôi
+  phục `pending`; ma nhãn trạng thái đơn, gồm rẻn `closeReason` và `endedEarlyBy` theo bên; `toWireOrderStatus`
+  phủ mọi trạng thái trong union.
+- `src/lib/__tests__/format.spec.ts` (10) — `formatVnd` (phân tách hàng nghìn, làm tròn, số âm, null),
+  `formatNumber`, `parseAmount`, thứ tự `dd/mm/yyyy`, `isEmptyDate` bắt sentinel `0001-01-01` của Postgres,
+  `secondsBetween`, `addHours`.
+- `src/lib/__tests__/validators.spec.ts` (9) — email, ma trận mật khẩu + `passwordRules` từng yếu tố, xác nhận
+  mật khẩu, OTP, và `MAX_MESSAGE_LENGTH === 500` — chốt §34 lại thành test để lần sau không ai nâng cap client
+  lên 1000 một lần nữa.
+
+**Admin — vitest, chọn phiên bản có chủ đích.** Repo đang Vite 8, nên trước khi cài tôi kiểm peer range:
+`vitest@5.1.0` khai báo `vite: '^6.4.0 || ^7.0.0 || ^8.0.0'` (cài xong xác nhận lại vite 8.3.5 + vitest 5.1.0,
+`npm ci` sạch 0 lỗ hổng). `vite.config.ts` đổi sang `defineConfig` nhập từ `vitest/config` và thêm
+`test: { environment: 'node', include: ['src/**/*.spec.ts'] }`. Specs import thẳng
+`{ describe, expect, it } from 'vitest'` nên không phải sửa tsconfig; `tsc -b` vẫn biên dịch cả hai file test
+(chứng minh bằng `tsc -p tsconfig.app.json --listFiles`, không phải đoán).
+
+- `src/auth/__tests__/permissions.spec.ts` (12) — `sectionOf` gộp route chi tiết về section cha; ma trận phân
+  quyền MODERATOR / FINANCE / SUPER_ADMIN (wildcard) và tài khoản **không** tier; `canOpenPath`,
+  `canOpenDossier`, `tierOf`, và `visibleSections` (MODERATOR 7 section, FINANCE 6, không tier chỉ `/`).
+- `src/lib/__tests__/labels.spec.ts` (18) — không map nào được để nhãn trùng chính cái mã (đúng quy tắc
+  "màn hình vận hành không lộ mã/UUID"; xem feedback của anh về plain-language UI), phủ toàn bộ
+  `CLOSE_REASON` và `LEDGER_TYPE` lấy theo enum BE ghi cứng để phát hiện drift khi BE thêm mã, nhãn đủ vòng đời
+  đơn, fallback của `labelOf`/`statusMeta`/`statusLabel`.
+
+**Một lỗi thật, tìm ra nhờ viết test** (không phải test sai): `formatBasisPoints` bo về 1 chữ số thập phân,
+trong khi `orders.fee_bps` là số nguyên 0..5000 (`CONSTRAINT "orders_fee_check"` ở
+`play-together-be/src/db/migrations/0000_init.sql:174`) và `feeOf = Math.round(gross * feeBps / 10000)`
+(`src/common/money/money.ts:19`). Nghĩa là phí 25 bps hiện thành "0,3%" và 123 bps hiện thành "1,2%" — một tỷ
+lệ mà người vận hành không cộng ra số tiền kèm đơn, ở cả `OrdersPage`, `OrderDetailPage`, `UserDetailPage` và
+`DashboardPage`. Sửa `maximumFractionDigits: 1 → 2`: số nguyên chia 100 không bao giờ cần quá 2 chữ số nên mọi
+giá trị hợp lệ đều hiển thị chính xác, số chẵn vẫn ra "10%" không thừa đuôi. Kèm test quét trọn 0..5000 khẳng
+định đọc nhãn ngược lại vẫn ra đúng bps đã lưu.
+
+**CI**: `- run: npm test` đứng trước bước bundle/build ở cả hai workflow (`play-together-fe/.github/workflows/ci.yml:38`,
+`play-together-admin/.github/workflows/ci.yml:32`); tên job đổi thành "Lint, typecheck, test and bundle/build".
+
+Cổng, chạy lại sau khi cài sạch từ lockfile:
+
+```
+FE     jest 35/35 · tsc --noEmit 0 · expo lint 0 · expo export --platform web 0
+admin  vitest 30/30 · tsc -b 0 · oxlint 0 (43 files) · vite build 0
+cả hai npm ci exit 0 từ lockfile đã commit — đúng lệnh CI dùng
+```
+
+**Sự cố đáng ghi lại để lần sau không lặp**: tôi định *xác minh lockfile mà không xoá tree* nên chạy
+`npm ci --dry-run`. Hoá ra npm xoá `node_modules` **trước** rồi mới bỏ qua bước cài — cả FE và admin thành thư
+mục rỗng, và ba tiến trình dev đang chạy trên đó (API, Metro, Vite) chết theo. Khôi phục bằng `npm ci` thật
+(exit 0 — cũng chính là bằng chứng CI cài được từ lockfile đã commit). API đã bật lại và kiểm:
+`GET http://localhost:3000/api/v2/health` → 200, `/docs` → 200. Muốn kiểm lockfile thì chạy thẳng `npm ci`;
+`--dry-run` không phải probe an toàn. Metro và Vite dev **chưa** bật lại (terminal của anh), nên trước khi test
+máy #122 anh chạy lại `npx expo start` (và `npm run dev` cho admin nếu cần).
+
+**Chưa làm, có chủ đích**: chưa có test render component — muốn bắt được kiểu lỗi lệch ô input hay bàn phím thì
+cần thêm `@testing-library/react-native` + jest setup, và chỉ đáng làm khi một màn đổi hình dạng; chưa đặt
+coverage threshold; test chạy trên Node nên không đụng code native, nghĩa là các defect device-only (§25, #122)
+máy test không tự phát hiện.
+
 
 
 
