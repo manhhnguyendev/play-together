@@ -2471,9 +2471,13 @@ trả `SessionStatsView` với `buckets[]` **oldest first**, mỗi ô gồm `buc
   (`orders.service.ts:611` cho `ENDED_EARLY`, `:930` cho `SETTLED`), đã kiểm trong code chứ không giả định.
 
 **Test BE**: `time.spec.ts` 6 → 11 ca (mốc địa phương, lùi ngày, lùi tháng, sang năm, đứng đúng lúc giao thừa), và `src/modules/users/session-stats.spec.ts` 9 ca cho phần gom mốc thuần: cửa sổ trống vẫn trả đủ số
-ô (để biểu đồ không nhầm "không có gì" với "không hỏi"), cắt theo nửa đêm giờ máy chứ không theo UTC, player
-khac hirer, `playerPayout` null vẫn tính phiên mà không tính tiền, dữ liệu trước cửa sổ bị loại, mốc tương lai
+ô (để biểu đồ không nhầm "không có gì" với "không hỏi"), cắt theo nửa đêm giờ máy chứ không theo UTC, vai player
+khác vai hirer, `playerPayout` null vẫn tính phiên mà không tính tiền, dữ liệu trước cửa sổ bị loại, mốc tương lai
 rơi vào ô mới nhất chứ không biến mất. **43/43 test BE pass** (trước đó 34).
+- Một ca e2e trong `test/v2-gaps.e2e-spec.ts` ("buckets my finished sessions per day and per month", suite
+  12/12 pass) khoá thêm đúng cái hợp đồng mà app vẽ biểu đồ dựa vào: đủ số ô trả về, startsAt tăng dần, **ô cuối
+  cùng phải là hôm nay theo giờ máy** (test tự tính bằng `Intl` với `Asia/Ho_Chi_Minh`, không copy giả định),
+  `granularity=week` / `buckets=0` → 400 và không token → 401.
 
 **App**: `src/components/stats/trendMath.ts` (pure: `buildTrendBars`, `barHeight`, `peakBar`, `shortBucketLabel`,
 `METRIC_CONFIG`) + `src/components/stats/SessionTrendCard.tsx` (2 hàng Chip: Ngày/Tháng và Doanh thu/Phiên đã
