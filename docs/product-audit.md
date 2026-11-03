@@ -2442,6 +2442,56 @@ cần thêm `@testing-library/react-native` + jest setup, và chỉ đáng làm 
 coverage threshold; test chạy trên Node nên không đụng code native, nghĩa là các defect device-only (§25, #122)
 máy test không tự phát hiện.
 
+## 37. #6 — `player-list` chuyển từ bộ nhớ tạm sang `?source=`
+
+Màn "Xem tất cả" của năm rail khám phá trước đây nhận dữ liệu qua một module singleton
+(`playerListDraft.set(...)` rồi `take()`). §14/#117 mới vá được nửa đường: `take()` đọc-một-lần nên không còn
+render nhầm danh sách của rail khác, nhưng bản thân route vẫn **không tự chứa gì cả** — sao chép link, mở từ
+thông báo, hay app bị nạp lại đều ra "Danh sách chỉ hiện khi mở từ một mục trên trang Chủ", kể cả khi API đang
+trả về đúng dữ liệu đó.
+
+Giờ URL là nguồn sự thật: `/player-list?source=new-accounts|same-hobbies|top-rating|recent-orders|recommend`.
+
+- **Một bảng định nghĩa, dùng cho cả rail và màn danh sách** — `src/features/discovery/playerListSources.ts`:
+  mỗi nguồn có `title`, `queryKey` và `queryFn` của chính nó. Home không còn tự viết năm `useQuery` nữa mà gọi
+  `usePlayerListSource('new-accounts', …)`…, nên rail và màn "Xem tất cả" **buộc** phải trùng key và trùng
+  fetcher; trước đây hai chỗ này là hai đoạn code giống nhau và rất dễ sửa lệch một bên.
+- `recommend` vẫn cần năm id của rail top-rating làm seed, cả về key (`home.recommend(userId, ids)`) lẫn giới
+  hạn `pageSize`. Màn danh sách dựng lại đúng chuỗi đó: chạy `top-rating` (enabled chỉ khi `source=recommend`)
+  rồi mới gọi `recommendations/players?limit=<ids.length>` — và giữ nguyên điều kiện của Home là phải đăng
+  nhập + đủ 5 id, để link mở lạnh không phát một request mà Home không bao giờ phát.
+- Tiêu đề lấy từ bảng, nên nhãn rail và nhãn màn danh sách không thể lệch nhau nữa.
+- Xoá `playerListDraft.ts`; `README.md` ghi lại tham số của route.
+- **5 test mới** (`src/features/discovery/__tests__/playerListSources.spec.ts`, nâng tổng số lên 40): key của
+  từng nguồn phải `toEqual` đúng `queryKeys.home.*` (if a key ever stops matching, opening "Xem tất cả" quietly
+  becomes a second request for a list that may come back different), `noSource` không được trùng với nguồn thật,
+  và `resolvePlayerListSource` từ chối `?source=bogus`, hoa/thường sai, cũng như dạng mảng `?source=a&source=b`.
+
+Kiểm chứng (Metro web, tài khoản `demo.hirer1`, API `192.168.1.9:3000`):
+
+```
+từ rail      : Home → "Xem tất cả" (rail đầu) → URL /player-list?source=new-accounts, tiêu đề
+               "Các người chơi mới", 5 thẻ người chơi
+mở lạnh      : nạp lại hẳn trang ở /player-list?source=top-rating (JS context mới, không còn gì trong bộ nhớ)
+               → tiêu đề "Top người chơi ưa thích" + 5 thẻ  〔trước đây: EmptyState "chỉ hiện khi mở từ trang Chủ"〕
+link lạ      : /player-list?source=bogus → "Danh sách người chơi" + hướng dẫn mở từ trang Chủ, không gọi API
+               nào cho danh sách
+chuỗi recommend: /player-list?source=recommend (mở lạnh) → network cho thấy đúng hai request theo thứ tự
+               GET /users?sort=rating&pageSize=5 → GET /recommendations/players?limit=5; tiêu đề
+               "Đề xuất cho bạn"; tài khoản này không có đề xuất nào nên màn hiện empty state thật, không treo
+quay lại     : nút "Quay lại" từ màn danh sách → /home
+gate         : tsc --noEmit 0 · expo lint 0 · jest 40/40
+```
+
+**Phát hiện ngoài lề, chặn cả lượt test điện thoại #122**: máy đã đổi IP LAN — `192.168.1.8` → **`192.168.1.9`**
+(`ipconfig`), trong khi `play-together-fe/.env` vẫn ghi `EXPO_PUBLIC_API_URL=http://192.168.1.8:3000/api/v2`.
+Hệ quả đo được: mọi request từ app treo bất định (`POST /auth/login` và các `OPTIONS` ở trạng thái pending mãi),
+không phải lỗi đăng nhập. API vẫn healthy trên `localhost:3000` và trên IP mới (`GET http://192.168.1.9:3000/api/v2/health`
+→ 200). Tôi **không** sửa `.env` của anh (file cấu hình local, và một IP hay đổi như thế này thì nên đặt IP tĩnh
+cho máy); toàn bộ kiểm chứng ở trên chạy với Metro mà tôi bật bằng `EXPO_PUBLIC_API_URL=http://192.168.1.9:3000/api/v2`
+trên tiến trình đó. Anh chỉ cần đổi một dòng trong `.env` rồi `npx expo start` lại là điện thoại dùng được tiếp.
+
+
 
 
 
