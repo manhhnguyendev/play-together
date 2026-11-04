@@ -19,6 +19,7 @@
     "check": "npm run typecheck && npm run lint",
     "db:seed": "npm --prefix play-together-be run db:seed",
     "db:reset": "npm --prefix play-together-be run db:reset",
+    "db:audit": "npm --prefix play-together-be run db:audit",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down"
   },

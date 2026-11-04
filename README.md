@@ -40,9 +40,13 @@ npm run dev        # API (3000) + admin (5174)
 npm run dev:app    # Expo dev server, chạy ở terminal riêng
 ```
 
-`play-together-be/.env.example` bật sẵn `AUTO_MIGRATE=true` và `SEED_DEMO_DATA=true`, nên lần chạy
-đầu API tự migrate và seed dữ liệu demo. Nếu bỏ qua bước copy `.env`, API vẫn khởi động với secret
-dev mặc định nhưng **không** seed — khi đó chạy `npm run db:seed`.
+`play-together-be/.env.example` bật sẵn `AUTO_MIGRATE=true`, nên lần khởi động đầu API tự tạo bảng.
+Dữ liệu demo **không** tự seed: muốn có thì chạy `npm run db:seed` (repo `play-together-be`). Nếu bỏ
+qua bước copy `.env`, API vẫn khởi động với secret dev mặc định nhưng không migrate.
+
+`SEED_DEMO_HISTORY=true npm run db:seed` seed thêm 70 ngày phiên đã đóng (đơn, tiền, đánh giá,
+thông báo) để biểu đồ, dashboard hai chiều và bảng Orders/Money của admin có số thật; `npm run db:audit`
+đọc lại toàn bộ cluster dưới dạng nháp và đối chiếu từng con số. Chi tiết: `play-together-be/README.md`.
 
 Hai client đọc URL API từ `.env` riêng (FE: `EXPO_PUBLIC_API_URL`, admin: `VITE_API_URL`); giá trị
 mặc định đã trỏ về `http://localhost:3000/api/v2` nên bước này là tuỳ chọn.
@@ -122,6 +126,7 @@ Tài liệu cũng giải thích kịch bản "tài khoản Google tự đặt m�
 | `npm run lint` | ESLint của BE + FE, oxlint của admin |
 | `npm run check` | typecheck + lint |
 | `npm run db:seed` / `db:reset` | Seed lại / reset dữ liệu PGlite |
+| `npm run db:audit` | Đối chiếu số liệu trong cluster PGlite (ví ↔ ledger ↔ escrow) |
 | `npm run docker:up` / `docker:down` | Dựng / dừng stack Docker (API + admin + Postgres) |
 
 Mỗi app vẫn có script riêng; xem README trong từng repo.

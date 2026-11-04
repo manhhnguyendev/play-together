@@ -2882,6 +2882,106 @@ API   : `google-auth.service.ts:29-34` đã nhận ba audience, `.env.example` c
   chưa bấm thật trên máy (vì máy đang dùng Expo Go cho các màn khác — anh xác nhận giúp nếu thấy nút
   vẫn mở trình duyệt).
 
+---
+
+## 44. Seed lịch sử: 70 ngày phiên đã đóng, viết đúng theo đường tiền của service
+
+Anh chốt: seed dữ liệu lịch sử trước, rồi mới test máy — "Làm luôn đi, tôi sẽ test sau khi seed xong" —
+để một lượt trên điện thoại bao được nhiều màn thay vì phải bấm tạo từng đơn.
+
+### Vì sao thiếu
+
+`npm run db:seed` không tạo đơn nào. Mọi màn đọc phiên thật đều chỉ có một vạch hoặc bảng trống:
+biểu đồ **Diễn biến phiên**, dashboard hai chiều Hirer/Player, danh sách **Đơn** và **Tiền** của admin,
+ví, lịch sử đơn, và cả hàng đợi yêu cầu trong app.
+
+### Đã viết — `src/db/demo-history.ts` (bật bằng `SEED_DEMO_HISTORY`, không bật theo `SEED_DEMO_DATA`)
+
+Mười suite e2e seed với `demoData: true` rồi tự tạo đơn để kiểm chứng; nếu lịch sử đi theo cờ đó thì
+chúng nhận thêm một đống đơn lạ, nên lịch sử có cờ riêng.
+
+```
+70 ngày trước   : mỗi ngày 2–3 phiên, 161 SETTLED + 18 ENDED_EARLY
+hôm nay         : 2 phiên vừa kết thúc cách đây ~1 giờ → tiền còn đang chờ về ví
+ngày mai / kia  : mỗi ngày 1 yêu cầu PROPOSED + 1–2 lịch SCHEDULED → lịch hẹn và hàng đợi không trống
+```
+
+Một phiên đi đúng chuỗi mà service ghi, không phải rải dòng vào bảng `orders`:
+
+| Bước | Dòng ghi thêm | Tiền |
+| --- | --- | --- |
+| `PROPOSED` | hop tạo yêu cầu + notice "Yêu cầu thuê mới" gửi player | — |
+| `SCHEDULED` (lúc accept) | hop + notice "Đã giữ lịch hẹn" gửi hirer | `holdEscrow`: escrow HELD + cặp ledger `ESCROW_HOLD`, trừ tiền hirer |
+| `LIVE` | hop "Lịch hẹn tự động bắt đầu đúng giờ đã đặt" (actor null) + 2 notice "Lượt thuê đã bắt đầu" | — |
+| hết giờ hẹn | hop `DISPUTED` (actor null) + 2 notice "Xác nhận lượt thuê" / "Lượt thuê đã kết thúc" | — |
+| `SETTLED` | hop + 2 notice "Lượt thuê hoàn thành" | `splitFee(earned, feeBps)`: 3 dòng ledger ESCROW_RELEASE / ORDER_EARNING / PLATFORM_FEE + một `pending_credits` |
+| `ENDED_EARLY` | hop + 2 notice "Lượt thuê kết thúc sớm" (kèm số tiền đã hoàn, format `formatVnd`) | `quoteEarlyEnd` tại **70% thời lượng đã đặt** → refund về hirer, escrow `PARTIALLY_SETTLED` |
+
+Ba ràng buộc viết tay hồi trước hay lệch nên giờ số được **suy ra**, không gõ vào:
+
+- `available_balance` của mỗi ví = Σ ledger USER − Σ `pending_credits` chưa nhả — đúng quy tắc mà
+  `releaseDuePendingCredits` dùng, và bản seed không bao giờ cho ra số < 0.
+- `player_payout` = số đã giải ngân − phí, và `orders.fee_bps` lấy từ `system_config` chứ không gõ cứng.
+- Counter trên hồ sơ player (rating, số đơn, đúng giờ, giờ chơi, ranking points) tính lại bằng đúng câu
+  aggregate của `StatsService.recompute`.
+
+`released_at` chỉ được đóng dấu khi đã tới hạn, nên những phiên mới nhất để lại tiền chờ thật —
+màn "chờ về ví" và job nhả tiền có việc để làm, thay vì danh sách trống.
+
+### Số đo sau khi seed lại (cluster dev, 2026-11-04)
+
+| Chỉ số | Trước | Sau |
+| --- | --- | --- |
+| đơn | 0 | **185** (PROPOSED 2 · SCHEDULED 4 · ENDED_EARLY 18 · SETTLED 161) |
+| đánh giá | 0 | **205** |
+| doanh thu player đã ghi sổ | 0 | **21.739.500 đ** |
+| phí nền tảng | 0 | **2.415.500 đ** |
+| escrow đang giữ | 0 | **650.000 đ** |
+| đang chờ về ví | 0 | **234.000 đ** |
+| thông báo (chưa đọc) | 0 | **1.406 (70)** |
+| biểu đồ 14 ngày gần nhất | 1 vạch | có mặt số ở **cả 14 ngày** |
+
+### Kiểm chứng
+
+```
+Audit : scripts/audit-demo-data.mjs → `npm run db:audit`, mở một BẢN COPY của cluster
+        (API vẫn chạy được, không đụng file đang khoá) và suy lại từng số.
+        21/21 PASS · exit 0
+Unit  : 5 suite / 60 ca PASS
+E2E   : 10 suite / 82 ca PASS (test tự seed, không bật lịch sử)
+Gate  : tsc --noEmit 0 · eslint 0 · nest build 0
+HTTP  : /wallet (player2 pendingBalance 108.000 + 1 pending credit còn hạn chờ),
+        /wallet/earnings/summary, /wallet/transactions, /wallet/deposits,
+        /orders?pageSize, /orders/requests, /users/me/session-stats (day + month),
+        /notifications (+unread-count 8), /admin/stats (185 đơn, escrowHeld 650.000), /admin/kpis,
+        /admin/money/{ledger,wallets,deposits,escrows}, /orders/:id/history,
+        /orders/:id/ratings, `canRate=false` khi hirer đã đánh giá đơn đó
+        hop admin thấy rõ: ∅→PROPOSED→SCHEDULED→LIVE→DISPUTED→SETTLED, `formatDateTimeInZone`
+        in giờ đúng múi Á Đông (20:45 04/11/2026)
+```
+
+### Một defect phụ tìm ra khi chuẩn bị seed — đã sửa
+
+`scripts/reset-db.mjs` **không đọc `.env`**, nên nó lấy mặc định `.data/pgdata` thay vì
+`PGLITE_DIR=.data/pgdata-fresh` mà `.env` đang trỏ tới: lệnh `db:reset` xoá nhầm cluster đã nghỉ dùng,
+không phải cluster đang chạy. Không mất dữ liệu (cluster thật còn nguyên, và bản backup
+`.data/pgdata-fresh.bak-20261104*` đã có sẵn từ trước). Đã sửa ba điểm: nạp `dotenv/config`, in đường
+sẽ xoá **trước khi** xoá, và từ chối mọi đường có `.bak` trong tên.
+
+### Còn chờ
+
+- **Test trên máy thật** — lượt của anh. Seed đã đủ dữ liệu cho: tìm player, tạo yêu cầu, nhận đơn,
+  kết thúc sớm, đánh giá (lớp phủ `RatingSheet` §40), ví + chờ về ví, thông báo + deep-link, lịch hẹn,
+  biểu đồ Diễn biến phiên, dashboard Player, và bảng Orders/Money/KPI của admin.
+- **Tab Chat trống, có chủ đích**: production không tự mở chat (dòng `chats` chỉ sinh khi ai đó bấm
+  Gửi tin), nên muốn test chat thì nhắn từ tài khoản hirer sang player ngay trên máy — đó đúng là
+  luồng cần test.
+- **Hàng đợi yêu cầu tự đóng sau 5 phút**: `order.response_window_minutes` = 5 là luật của sản phẩm,
+  bản seed tôn trọng giá trị trong `system_config`. Muốn hàng đợi mở suốt buổi test thì nâng setting
+  đó trong admin **rồi tạo** yêu cầu mới; seed lại sẽ kéo setting về mặc định.
+- **Nạp/rút thật**: không seed withdrawal nào (`pendingUserWithdrawals = 0`); màn rút tiền vẫn cần
+  bấm thật để test.
+
 
 
 
