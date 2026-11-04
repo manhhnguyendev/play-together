@@ -2795,9 +2795,9 @@ Ba con số trong bảng trên đều đo lại bằng lệnh trong chính lư�
   state machine tiền tệ, chờ lượt test máy kế tiếp. Hai mục "trùng query" từng ghi ở nhóm G đã **bác bỏ**
   khi đối chiếu code (màn Thống kê dùng `/wallet/earnings/summary`; `history/[orderId]` là superset sau
   query key riêng).
-- **#7 — Google sign-in trên bản dựng thật: chờ anh quyết** 6.A (thư viện native, đổi luôn cách test máy
-  của cả app) hay 6.B (client Android, giữ Expo Go cho phần còn lại). Phần code phía đã làm xong;
-  việc còn lại thuộc tài khoản Google Cloud / expo.dev của anh (`docs/google-signin.md` §6.C).
+- **#7 — Google sign-in trên bản dựng thật: anh chốt 6.B** (giữ `expo-auth-session` + client Android)
+  vì vòng test máy vẫn cần Expo Go; 6.A gác có lý do. **Code app đã cài xong cùng ngày — xem §43**,
+  còn thiếu client Android trong Google Cloud Console của anh và một lượt EAS build.
 
 ### Backlog còn mở sau lượt này
 
@@ -2808,6 +2808,79 @@ Ba con số trong bảng trên đều đo lại bằng lệnh trong chính lư�
 | Seed đơn lịch sử để biểu đồ "Diễn biến phiên" (§38) có nhiều cột | đo thật trên `GET /users/me/session-stats` của `demo.player1`: **14 bucket ngày, chỉ một bucket khác 0** (2026-11-03) — biểu đồ đang là một cột. Seed là viết vào PGlite mà lượt test máy đang dùng |
 | Nhóm G (§42) | chờ lượt test máy |
 | Cấu hình `SMTP_*` khi triển khai | việc của hạ tầng thật |
+
+
+## 43. #7 — 6.B đã cài: đăng nhập Google trên bản dựng thật, không đổi vòng test Expo Go
+
+Anh chốt 6.B với lý do quyết định: **"mình vẫn cần test app qua Expo Go"**. Bảng so sánh hai đường (đã
+trình trước khi làm) rút ra ba sự thật dẫn tới lựa chọn:
+
+1. **Cả hai đường đều phải tạo client Android + khai SHA-1** — nên 6.A không giảm việc phía tài khoản,
+   chỉ tăng chi phí test.
+2. Máy này **không có JDK / Android SDK / adb** (`java` và `adb` đều không trên PATH) và `eas-cli` chưa
+   login → mọi bản dựng đều là EAS cloud, theo trang pricing hôm nay gói miễn phí có **15 lượt build
+   Android**. 6.A biến mỗi lượt test máy thành một lượt build; 6.B chỉ cần build cho riêng nút Google.
+3. `@deprecated` trong `expo-auth-session@58.0.14` chỉ gắn trên **type** `GoogleAuthRequestConfig`
+   (`build/providers/Google.d.ts:8`), hai hook `useIdTokenAuthRequest` (dòng 68) và `useAuthRequest`
+   (dòng 83) **không** bị đánh dấu → 6.B không phải code sắp bị bỏ.
+
+### Đã cài (chỉ app, API không sửa dòng nào)
+
+- `src/features/auth/googleNativeRedirect.ts` (mới, thuần): client ID → scheme trả về dạng AppAuth
+  `com.googleusercontent.apps.<id-bỏ-hậu-tố>`, và redirect `<scheme>:/oauth2redirect`. ID không đúng
+  dạng thì trả `null` để caller rơi về hint, không tự bịa scheme.
+- `app.config.ts` (mới): đọc `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` / `..._IOS_CLIENT_ID` và **thêm
+  scheme đó vào `scheme`**, giữ `playtogether` cho deep-link của router. Không có env thì config y hệt
+  `app.json` — Expo Go và web không bị chạm. Lý do nằm ở config chứ không phải trong app code: scheme
+  là cấu hình native, phải có trước lúc dựng.
+  *Ghi chú kỹ thuật*: `app.config.ts` **không import được** code trong `src/` — Expo nạp file này bằng
+  `require` thông thường (lỗi thật: `Cannot find module .../src/features/auth/googleNativeRedirect`,
+  kể cả khi đã dùng đường dẫn tuyệt đối). Nên quy tắc derive tồn tại hai nơi, và
+  `googleNativeRedirect.spec.ts` có ca test so `app.config.ts` sinh scheme gì với
+  `googleInstalledScheme()` để hai bên lệch nhau là test đỏ.
+- `GoogleLoginButton.tsx`: vẫn **một hook** `useIdTokenAuthRequest` — nó tự chọn kiểu luồng theo nền
+  tảng (`Google.js:88-95`: `responseType: IdToken` chỉ khi `Platform.OS === 'web'`; `Google.js:108-121`:
+  `androidClientId`/`iosClientId` được ưu tiên trên từng nền tảng; `Google.js:142-148`: `redirectUri`
+  truyền tay thắng mặc định). Thêm `androidClientId`/`iosClientId` + `redirectUri` dẫn xuất, không tách
+  component.
+- Cũng trong nút đó: **Expo Go không còn mở luồng nữa**. `Constants.executionEnvironment ===
+  ExecutionEnvironment.StoreClient` → toast nói "Expo Go không mở được liên kết Google trả về…".
+  Trước đây Expo Go hiện một nút bấm rồi chết giữa trang Google — tương tác giả, đúng thứ brief cấm.
+  Thiếu client cho nền tảng nào thì hint gọi đúng tên biến của nền tảng đó.
+- `.env.example` khai `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` / `_IOS_` kèm hệ quả build; README của app
+  viết lại đoạn Google.
+
+### Bằng chứng
+
+```
+Unit  (googleNativeRedirect.spec.ts, 14 ca mới): derive từ client ID thật · ID đã ở dạng scheme thì giữ
+          nguyên · trim · 6 input hỏng/empty → null · redirect = scheme + :/oauth2redirect ·
+          **app.config.ts đăng ký đúng scheme mà helper tính**, và không đổi gì khi thiếu env
+Gate  : FE tsc 0 · expo lint 0 · jest **8 suite / 75 ca** · `expo export --platform web` 0
+Config: `npx expo config --type public` — không env → `scheme: 'playtogether'`;
+          với client Android giả → `['playtogether','com.googleusercontent.apps.1234567890-abcdefg']`
+Web   (đo thật, không suy diễn): vào `/login`, bấm nút, đọc URL Google nhận được —
+          `response_type=id_token`, `redirect_uri=http://localhost:8081`,
+          `scope=openid + userinfo.profile + userinfo.email`, `client_id` = client Web cũ
+          → đường web **không đổi hành vi** sau bản sửa này
+API   : `google-auth.service.ts:29-34` đã nhận ba audience, `.env.example` của BE đã khai đủ
+          GOOGLE_ANDROID_CLIENT_ID / GOOGLE_IOS_CLIENT_ID → không sửa code, không đổi OpenAPI
+```
+
+### Chưa kiểm chứng được (và vì sao)
+
+- **Luồng code + PKCE trên máy thật**: cần một client Android (Console của anh) và một bản dựng.
+  Không có JDK/Android Studio nên không dựng cục bộ để thử sớm hơn được.
+- **Đúng dạng redirect**: app gửi dạng AppAuth vì tài liệu OAuth cho installed app của Google buộc dạng
+  đó, còn mặc định của thư viện là `com.playtogether.app:/oauthredirect`. Nếu build đầu báo
+  `redirect_uri_mismatch` (toast dịch sẵn mã này, mục 8), đổi về mặc định chỉ mất hai chỗ
+  (`GoogleLoginButton` + `app.config.ts`) — test giữ chúng khớp nhau.
+- **Khoảng lặng khi đổi code thất bại**: `useAuthRequest` tự đổi code bên trong hook; nếu Google từ chối,
+  promise nội bộ reject và **không có `response`** → nút đứng yên, không toast. Đây là giới hạn của
+  đường 6.B, đã ghi vào `docs/google-signin.md` để lần build đầu biết mà nhìn network thay vì chờ toast.
+- **Expo Go không còn là môi trường thử Google**: hành vi này chỉ quan sát được bằng code + tài liệu §5,
+  chưa bấm thật trên máy (vì máy đang dùng Expo Go cho các màn khác — anh xác nhận giúp nếu thấy nút
+  vẫn mở trình duyệt).
 
 
 

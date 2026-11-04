@@ -87,22 +87,27 @@ trong `.env` rồi build lại (`docker compose build admin`).
 giải thích từng bước, tóm lại như sau:
 
 - **Web**: tạo OAuth consent screen + client ID loại *Web application*, điền cùng một giá trị vào
-  `GOOGLE_CLIENT_ID` (API) và `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (app). Xong.
+  `GOOGLE_CLIENT_ID` (API) và `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (app). Xong — đường này đang chạy thật.
 - **Điện thoại**: một client *Web application* **không bao giờ** hoàn tất được luồng này —
   `useIdTokenAuthRequest` chỉ xin `id_token` khi `Platform.OS === 'web'`, còn native đi luồng
   code + PKCE và tự đổi code, bước đổi đó cần client của chính app installed. **Expo Go thì không
-  test được dù đã cấu hình đúng**, vì redirect của Google trỏ về scheme của app, không phải của Expo Go.
-  Hai cách làm cho nó chạy thật — chọn một, ghi rõ ở §6 của tài liệu:
-  - **6.A**: thêm thư viện Google có native code (`@react-native-google-signin/google-signin` hoặc
-    `react-native-nitro-google-signin`) — cách Expo hướng dẫn từ 02/11/2026, dùng lại đúng client Web
-    hiện tại nên API không đổi, nhưng native code mới làm **Expo Go hết nạp được app**: mọi lượt test
-    máy từ đó phải qua dev build.
-  - **6.B**: giữ `expo-auth-session`, xin thêm client loại **Android** (và iOS nếu cần) với package
-    name + SHA-1 của keystore, rồi khai `GOOGLE_ANDROID_CLIENT_ID` cho API. Ít đổi hơn và Expo Go vẫn
-    dùng được cho phần còn lại; đổi lại là đi trên một type cấu hình mà Expo đã đánh dấu `@deprecated`
-    (riêng hai hook thì bản 58.0.14 chưa đánh dấu — xem `docs/google-signin.md` §6.B).
-- `expo-dev-client` **chưa** được cài, và 6.A cũng chưa — cả hai đều chặn đúng lượt test trên điện
-  thoại, nên quyết định để bạn chọn. Các việc chỉ chủ tài khoản Google/expo.dev làm được liệt kê ở §6.C.
+  bao giờ chạy được**, vì thân phận gói và scheme trả về của nó là của Expo Go — nên từ 04/11/2026 app
+  không mở luồng Google trong Expo Go nữa mà toast giải thích, mọi lượt test máy khác vẫn đi Expo Go
+  như cũ.
+  - **6.B — đã chọn và đã cài code (04/11/2026)**: giữ `expo-auth-session`, xin thêm client loại
+    **Android** (package `com.playtogether.app` + SHA-1 của keystore bản dựng), khai
+    `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` (app) và `GOOGLE_ANDROID_CLIENT_ID` (API). App tự dẫn xuất
+    redirect AppAuth từ client ID và `app.config.ts` đăng ký scheme trả về đó lúc build, nên **phải build
+    khi đã có biến env**. Không sửa dòng code API nào.
+  - **6.A — gác có lý do**: thêm thư viện Google có native code (`@react-native-google-signin/google-signin`
+    hoặc `react-native-nitro-google-signin`) là cách Expo hướng dẫn từ 02/11/2026, nhưng native code mới
+    làm **Expo Go hết nạp được app** — đổi luôn vòng test máy đang dùng. Cả hai đường đều phải tạo client
+    Android + khai SHA-1 như nhau, nên 6.A không tiết kiệm việc phía tài khoản. Quay lại khi cần lên
+    store hoặc cần iOS.
+- Còn thiếu để bấm nút chạy thật trên máy: **một lượt EAS build** (máy này không có JDK/Android SDK nên
+  không build cục bộ được) và các giá trị của anh trong Google Cloud Console + hai file `.env`.
+  `expo-dev-client` vẫn chưa cài — cần nó thì tài liệu ghi rõ ở §6. Toàn bộ việc chỉ chủ tài khoản làm
+  được nằm ở §6.C.
 
 Tài liệu cũng giải thích kịch bản "tài khoản Google tự đặt mật khẩu qua Quên mật khẩu" chạy ra sao (§7).
 
