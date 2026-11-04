@@ -81,11 +81,29 @@ trong `.env` rồi build lại (`docker compose build admin`).
 
 ## Tùy chọn: đăng nhập Google
 
-App và API đã có sẵn `POST /api/v2/auth/google`; chỉ thiếu client ID của bạn.
-Làm theo [docs/google-signin.md](docs/google-signin.md) — tạo OAuth consent screen + client ID
-"Web application", rồi điền cùng một giá trị vào `GOOGLE_CLIENT_ID` (API) và
-`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (app). Tài liệu cũng giải thích vì sao Expo Go không test
-được nút này và kịch bản "tài khoản Google tự đặt mật khẩu qua Quên mật khẩu" chạy ra sao.
+`POST /api/v2/auth/google` và nút trong app đã xong; chỉ thiếu client ID của bạn.
+**Hôm nay luồng này chạy trên web (`react-native-web`), chưa chạy trên điện thoại thật**, và
+đó là giới hạn kỹ thuật chứ không phải thiếu cấu hình. [docs/google-signin.md](docs/google-signin.md)
+giải thích từng bước, tóm lại như sau:
+
+- **Web**: tạo OAuth consent screen + client ID loại *Web application*, điền cùng một giá trị vào
+  `GOOGLE_CLIENT_ID` (API) và `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (app). Xong.
+- **Điện thoại**: một client *Web application* **không bao giờ** hoàn tất được luồng này —
+  `useIdTokenAuthRequest` chỉ xin `id_token` khi `Platform.OS === 'web'`, còn native đi luồng
+  code + PKCE và tự đổi code, bước đổi đó cần client của chính app installed. **Expo Go thì không
+  test được dù đã cấu hình đúng**, vì redirect của Google trỏ về scheme của app, không phải của Expo Go.
+  Hai cách làm cho nó chạy thật — chọn một, ghi rõ ở §6 của tài liệu:
+  - **6.A**: thêm thư viện Google có native code (`@react-native-google-signin/google-signin` hoặc
+    `react-native-nitro-google-signin`) — cách Expo hướng dẫn từ 02/11/2026, dùng lại đúng client Web
+    hiện tại nên API không đổi, nhưng native code mới làm **Expo Go hết nạp được app**: mọi lượt test
+    máy từ đó phải qua dev build.
+  - **6.B**: giữ `expo-auth-session`, xin thêm client loại **Android** (và iOS nếu cần) với package
+    name + SHA-1 của keystore, rồi khai `GOOGLE_ANDROID_CLIENT_ID` cho API. Ít đổi hơn và Expo Go vẫn
+    dùng được cho phần còn lại, nhưng đi trên con đường mà Expo đã đánh dấu `@deprecated`.
+- `expo-dev-client` **chưa** được cài, và 6.A cũng chưa — cả hai đều chặn đúng lượt test trên điện
+  thoại, nên quyết định để bạn chọn. Các việc chỉ chủ tài khoản Google/expo.dev làm được liệt kê ở §6.C.
+
+Tài liệu cũng giải thích kịch bản "tài khoản Google tự đặt mật khẩu qua Quên mật khẩu" chạy ra sao (§7).
 
 ## Script gốc
 
@@ -122,9 +140,10 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
 
 ## Giới hạn đã biết
 
-- OpenAPI đã bật Swagger CLI plugin: **136 operation**, không operation nào thiếu response thành
-  công — 97 × `200`, 17 × `201`, 1 × `202` và 21 × `204` (`@ApiNoContentResponse`). `openapi.json`
-  là đầu vào cho Orval (`npm run api:generate`) ở cả hai client.
+- OpenAPI đã bật Swagger CLI plugin: **123 path / 146 operation**, không operation nào thiếu response
+  thành công — 107 × `200`, 17 × `201`, 1 × `202` và 21 × `204` (`@ApiNoContentResponse`). `openapi.json`
+  là đầu vào cho Orval (`npm run api:generate`) ở cả hai client. Muốn kiểm lại con số (nó đổi theo API):
+  `npm run openapi:export` khi API đang chạy, rồi đếm `paths` và các method trong `play-together-be/openapi.json`.
 - **Admin** gọi thẳng endpoint và model sinh ra trong `src/api/generated`. **FE** vẫn giữ lớp adapter
   v2 viết tay ở `src/api/v2` (dịch wire type về model cũ); bản sinh ra trong `src/api/generated` đã
   có sẵn nhưng chưa màn hình nào dùng, để dành cho bước chuyển đổi sau.
@@ -138,8 +157,13 @@ Khi cần khoá phiên bản chéo app thì chuyển sang workspaces (hoặc sub
   build + smoke test; admin có `play-together-admin/Dockerfile` (Vite build → nginx, proxy `/api/`);
   `docker-compose.yml` ở repo gốc ghép ba service `db`/`api`/`admin`. FE không đóng gói container vì là
   app mobile.
-- API có GitHub Actions CI (`.github/workflows/ci.yml` ở repo BE: lint, typecheck, unit + e2e, build
-  image và smoke test `/health`) và ESLint type-aware.
+- **Cả ba app đều có GitHub Actions CI** chạy trên `main` (`.github/workflows/ci.yml` của từng repo):
+  API — lint, typecheck, `npm run build`, unit + e2e, rồi job thứ hai build Docker image và probe
+  `/health` trong container; app — lint, typecheck, `npm test`, rồi `expo export --platform web` như
+  cổng bundle; admin — oxlint, `tsc -b`, `npm test`, `vite build`. API còn dùng ESLint type-aware.
+- **Test nằm ở từng repo, không có ở repo gốc**: `npm test` trong `play-together-be` (unit đặt cạnh code +
+  e2e chạy trên PGlite in-memory), `play-together-fe` (jest-expo, chỉ lớp thuần — xem README của app) và
+  `play-together-admin` (vitest cho RBAC và label). `npm run check` ở gốc chỉ gộp typecheck + lint.
 
 ## Mã nguồn trên GitHub
 

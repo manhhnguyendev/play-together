@@ -2765,6 +2765,51 @@ của môi trường đo bị treo ngay sau phần kiểm sheet (§40) nên khô
 true thì nút xuất hiện, §40) và API giờ trả false; không phải một lần bấm thật sau khi sửa.
 
 
+## 42. Đồng bộ lại tài liệu trước khi sang task mới
+
+Anh yêu cầu: cập nhật plan/spec/doc cho khớp code **trước** khi làm tiếp. Đây là biên bản của lượt đồng bộ đó —
+mỗi dòng là một câu tài liệu đang nói sai so với code, kèm cách đã đo lại.
+
+### Những chỗ đã lệch và đã sửa
+
+| Tài liệu | Câu cũ nói gì | Code/đo thật | Đã sửa |
+| --- | --- | --- | --- |
+| `README.md` gốc, "Giới hạn đã biết" | "**136 operation** … 97 × `200`" | `play-together-be/openapi.json` tính lại: **123 path / 146 operation** — 107 × `200`, 17 × `201`, 1 × `202`, 21 × `204` | ghi số mới + kèm lệnh đếm lại, vì con số này đổi theo API |
+| `README.md` gốc, "Giới hạn đã biết" | "**API có** GitHub Actions CI" | `.github/workflows/ci.yml` tồn tại ở **cả ba** app (kiểm bằng `ls` từng repo) | viết lại: mỗi repo một đoạn, liệt kê đúng bước từng pipeline |
+| `README.md` gốc | (không nói test chạy ở đâu) | repo gốc **không** có script `test` — `package.json` chỉ có `check` = typecheck + lint | thêm bullet: test nằm ở từng repo, `npm run check` ở gốc không chạy test |
+| `README.md` gốc, "Tùy chọn: đăng nhập Google" | "tạo client *Web application* rồi điền cùng giá trị vào API và app" là xong | đúng cho web, **sai cho điện thoại**: `useIdTokenAuthRequest` chỉ xin `id_token` khi `Platform.OS === 'web'`; native đi code + PKCE và tự đổi code, đổi đó cần client installed app | viết lại thành hai nhánh (web xong ngay / device cần 6.A hoặc 6.B) + nêu Expo Go không test được, theo `docs/google-signin.md` §6 |
+| `play-together-be/README.md` | cây `test/` liệt kê **3** e2e spec; unit = "money, time zones, pagination" | `ls test` = **10** spec; unit còn `rating-eligibility.spec.ts` (luật đánh giá, §41) | bổ sung đủ 10 spec + đổi mô tả unit |
+| `play-together-be/README.md` | bảng env chỉ có `GOOGLE_CLIENT_ID` | `GoogleAuthService` nhận danh sách audience (`google-auth.service.ts:29-34`), biến `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` đã dùng thật | thêm hàng riêng cho hai biến đó |
+| `play-together-fe/README.md` | **không** nhắc tới test nào, dù CI chạy `npm test` | jest-expo: 7 suite / 61 ca, chỉ import được lớp thuần | thêm `npm test` / `test:watch` vào Scripts + mục **Tests** giải thích giới hạn `expo-asset` |
+| `play-together-admin/README.md` | **không** nhắc vitest, dù CI chạy `npm test` | 2 file / 30 ca: `src/auth/permissions.ts` (RBAC) và `src/lib/labels.ts` (nhãn %, trong đó có phí theo basis point — §36) | thêm script + đoạn ghi rõ phạm vi test và caveat "không render component" |
+
+Ba con số trong bảng trên đều đo lại bằng lệnh trong chính lượt này, không lấy từ trí nhớ.
+
+### Trạng thái các đề án (kể từ §23)
+
+- **§23 — đề án gộp màn: đóng**, trừ **nhóm G**. Từng nhóm một mục: B → §29, A → §30, F → §31, E → §32,
+  D → §33, C → §35; **C2** (§40) thành `RatingSheet` — màn `rating/[orderId]` đã xoá, lớp phủ nằm trong
+  `end-order`. Hai dòng "Còn lại của §23" ở cuối §32 (dòng 2224) và cuối §33 (dòng 2268) là mô tả
+  **tại thời điểm viết**, không phải backlog — muốn biết còn gì thì đọc mục Backlog bên dưới.
+- **Nhóm G** (hai màn đàm phán đơn) **gác có chủ đích**, không phải sót: gộp chúng là sửa UI của một
+  state machine tiền tệ, chờ lượt test máy kế tiếp. Hai mục "trùng query" từng ghi ở nhóm G đã **bác bỏ**
+  khi đối chiếu code (màn Thống kê dùng `/wallet/earnings/summary`; `history/[orderId]` là superset sau
+  query key riêng).
+- **#7 — Google sign-in trên bản dựng thật: chờ anh quyết** 6.A (thư viện native, đổi luôn cách test máy
+  của cả app) hay 6.B (client Android, giữ Expo Go cho phần còn lại). Phần code phía đã làm xong;
+  việc còn lại thuộc tài khoản Google Cloud / expo.dev của anh (`docs/google-signin.md` §6.C).
+
+### Backlog còn mở sau lượt này
+
+| Việc | Vì sao chưa làm ngay |
+| --- | --- |
+| Expo SDK 58.0.19 → 58.0.23 (+ `npx expo install --fix`) | `npm view expo dist-tags.latest` = **58.0.23** hôm nay, app đang khoá `~58.0.19`. Bản vá trong cùng SDK, nhưng mỗi lần nâng là một lần phải test lại trên máy; anh yêu cầu đồng bộ tài liệu trước nên chưa động |
+| Test render component (`@testing-library/react-native` + map `expo-asset` trong jest) | thêm dependency vào harness vừa dựng; nong phạm vi test là quyết định của anh |
+| Seed đơn lịch sử để biểu đồ "Diễn biến phiên" (§38) có nhiều cột | đo thật trên `GET /users/me/session-stats` của `demo.player1`: **14 bucket ngày, chỉ một bucket khác 0** (2026-11-03) — biểu đồ đang là một cột. Seed là viết vào PGlite mà lượt test máy đang dùng |
+| Nhóm G (§42) | chờ lượt test máy |
+| Cấu hình `SMTP_*` khi triển khai | việc của hạ tầng thật |
+
+
 
 
 
