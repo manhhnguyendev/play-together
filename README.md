@@ -99,7 +99,8 @@ giải thích từng bước, tóm lại như sau:
     máy từ đó phải qua dev build.
   - **6.B**: giữ `expo-auth-session`, xin thêm client loại **Android** (và iOS nếu cần) với package
     name + SHA-1 của keystore, rồi khai `GOOGLE_ANDROID_CLIENT_ID` cho API. Ít đổi hơn và Expo Go vẫn
-    dùng được cho phần còn lại, nhưng đi trên con đường mà Expo đã đánh dấu `@deprecated`.
+    dùng được cho phần còn lại; đổi lại là đi trên một type cấu hình mà Expo đã đánh dấu `@deprecated`
+    (riêng hai hook thì bản 58.0.14 chưa đánh dấu — xem `docs/google-signin.md` §6.B).
 - `expo-dev-client` **chưa** được cài, và 6.A cũng chưa — cả hai đều chặn đúng lượt test trên điện
   thoại, nên quyết định để bạn chọn. Các việc chỉ chủ tài khoản Google/expo.dev làm được liệt kê ở §6.C.
 

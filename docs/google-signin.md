@@ -167,7 +167,12 @@ rồi tự đổi code lấy `id_token` (`fullResult.params.id_token`). Việc c
    danh sách audience sẵn (`src/modules/auth/google-auth.service.ts:29-34`), không sửa code.
 
 Chi phí: ít hơn 6.A (một file app + hai biến env), Expo Go còn dùng được cho mọi thứ khác, nhưng vẫn
-phải dev build cho riêng Google, và nó đi trên con đường mà Expo đã đánh dấu `@deprecated`. iOS
+phải dev build cho riêng Google. Về rủi ro API: `@deprecated` chỉ gắn trên **type**
+`GoogleAuthRequestConfig` (`expo-auth-session@58.0.14`, `build/providers/Google.d.ts:8`), còn hai hook
+`useAuthRequest` / `useIdTokenAuthRequest` **không** bị đánh dấu — nên 6.B vẫn chạy trên code đang được
+duy trì, nhưng kiểu cấu hình hai hook đó nhận thì Expo đã đánh dấu để khuyên chuyển hướng. Kiểm trên bản
+`expo-auth-session@58.0.14` đang cài: `GoogleAuthRequestConfig` có `@deprecated`, còn `useAuthRequest`
+và `useIdTokenAuthRequest` trong `build/providers/Google.d.ts` (dòng 68 và 83) thì không. iOS
 cần thêm một client *iOS* (Bundle ID `com.playtogether.app`) và tài khoản Apple Developer.
 
 ### 6.C. Những việc chỉ chủ tài khoản làm được
