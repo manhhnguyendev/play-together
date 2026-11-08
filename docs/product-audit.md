@@ -4154,3 +4154,42 @@ chuỗi `ant-tabs-ink-bar.ant-tabs-ink-bar-animated{transition:none}` trong chun
 
 **Rule đã cập nhật**: DESIGN.md §5.7 viết lại — *không animate thuộc tính layout, kể cả trên phần tử
 absolute*; indicator cần trượt thì dùng `transform`, không làm được thì đứng yên.
+
+## 63. CI đỏ sau push: container không tạo được `/app/uploads`, API chết ngay khi boot (lỗi do mình push)
+
+**Triệu chứng** (run `42490839858`, job `Build and smoke-test the image`): 30 lần probe `curl
+http://localhost:3000/api/v2/health` đều `curl: (7) ... Could not connect`, sau đó `docker logs` in ra
+
+```
+Application failed to start: Error: EACCES: permission denied, mkdir '/app/uploads'
+    at mkdirSync (node:fs:1370:26)
+    at serveUploadsFrom (/app/dist/common/storage/serve-uploads.js:13:29)
+    at bootstrap (/app/dist/main.js:37:42)
+```
+
+Job `Typecheck, build and test` (unit 60/60 + e2e 11 suites 92/92) **xanh** — nghĩa là toàn bộ cổng tôi
+chạy lokal đều đúng, và vẫn bỏ sót lỗi này.
+
+**Nguyên nhân**: §46 thêm `serveUploadsFrom()` gọi `mkdirSync(UPLOAD_DIR, { recursive: true })` lúc boot,
+mặc định `uploads`resolve theo cwd. Dockerfile runtime `FROM node:22-bookworm-slim` có `WORKDIR /app` do
+**root** sở hữu, rồi `USER node`; `COPY --chown=node:node` chỉ đổi chủ ba thư mục được copy
+(`package.json`, `node_modules`, `dist`), không đổi chủ `/app`. User `node` vì thế không được phép tạo
+thư mục con mới trong `/app`. `VOLUME` cũng không cứu: khai báo volume không làm thư mục bên trong thuộc
+về `node`.
+
+Máy này không có Docker (`docker: command not found`), nên `compose up`/`docker run` chưa từng được chạy
+ở lokal — đúng cái đã ghi trong §Docker của README. Bài học thật: **mọi thay đổi đụng đường đi của file
+trên đĩa phải có ít nhất một cổng chạy trong môi trường nó deploy**, không phải môi trường dev ghi log
+`Connected using pglite` là đủ.
+
+**Sửa**:
+- `Dockerfile`: `RUN mkdir -p /app/.data /app/uploads && chown -R node:node /app/.data /app/uploads` đặt
+  **trước** `USER node`, thêm `UPLOAD_DIR=/app/uploads` vào `ENV` và `/app/uploads` vào `VOLUME`.
+- `play-together-be/docker-compose.yml` và `docker-compose.yml` (repo gốc): mount volume named `uploads`
+  vào `/app/uploads` cho service `api` + khai báo trong `volumes:`. Không mount thì ảnh avatar nằm ở lớp
+  container / volume ẩn, `down -v` là mất hết.
+- README BE + README gốc ghi lại đường nào cần volume.
+
+**Kiểm chứng**: YAML hai file compose parse bằng `node_modules/yaml` → `api.volumes=["uploads:/app/uploads"]`,
+`topVolumes=["pgdata","uploads"]` cả hai file. Không có Docker ở lokal nên **bằng chứng quyết định là CI
+chạy lại**; §63 này viết trước khi có kết quả, số run sẽ ghi ở vòng sau.

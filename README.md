@@ -64,6 +64,8 @@ npm run docker:up         # = docker compose up --build
   chỉ chứa tài liệu — code của ba app bị `.gitignore` và nằm ở repo riêng, nên clone lẻ repo gốc sẽ
   không dựng được.
 - Seed dữ liệu demo sau lần chạy đầu: `docker compose exec api node dist/db/seed-cli.js`
+- Ảnh người dùng upload (`POST /uploads`) nằm trong volume `uploads`, mount vào `/app/uploads` của
+  container API. Xoá volume đó (`docker compose down -v`) là mất toàn bộ avatar đã tải lên.
 - App mobile **không** nằm trong compose (cần thiết bị/simulator hoặc Expo Go): chạy `npm run dev:app`
   và trỏ `EXPO_PUBLIC_API_URL` về IP LAN của máy, cổng 3000.
 - `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` bắt buộc có trong `.env` (compose dừng nếu thiếu);

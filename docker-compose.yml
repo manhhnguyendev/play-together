@@ -42,6 +42,10 @@ services:
       MAIL_FROM: ${MAIL_FROM:-}
     ports:
       - '3000:3000'
+    volumes:
+      # Uploaded images are the one piece of state this service owns on disk. Without a named
+      # volume Docker gives the /app/uploads VOLUME an anonymous one, so `down -v` drops every avatar.
+      - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -60,3 +64,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:
