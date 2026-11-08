@@ -4191,5 +4191,15 @@ trên đĩa phải có ít nhất một cổng chạy trong môi trường nó d
 - README BE + README gốc ghi lại đường nào cần volume.
 
 **Kiểm chứng**: YAML hai file compose parse bằng `node_modules/yaml` → `api.volumes=["uploads:/app/uploads"]`,
-`topVolumes=["pgdata","uploads"]` cả hai file. Không có Docker ở lokal nên **bằng chứng quyết định là CI
-chạy lại**; §63 này viết trước khi có kết quả, số run sẽ ghi ở vòng sau.
+`topVolumes=["pgdata","uploads"]` cả hai file. Máy này không có Docker (`docker: command not found`) nên
+bằng chứng quyết định là CI chạy lại, và nó đã chạy: run `42491626825` trên commit `ecfe1a5` cho
+**`conclusion=success`** ở cả hai job, log step smoke test in ra
+
+```
+API healthy after 2 attempt(s)
+{"status":"ok","database":"up","uptimeSeconds":0,"version":"2.0.0"}
+```
+
+(cùng step đó ở run hỏng in ra 30 dòng `curl: (7) Could not connect` rồi `API did not become healthy in
+time`). Hai run FE `42490842981` và admin `42490846641` vẫn `success`, nên phần code app của đợt push này
+không liên quan tới hỏng hóc.
