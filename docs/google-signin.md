@@ -107,24 +107,37 @@ Không cấu hình thì nút Google vẫn hiện, chỉ toast nhắc "Chưa cấ
 | --- | --- | --- |
 | Web (`http://localhost:8081`) | ✅ ngay sau khi làm mục 2–4 | đường test nhanh nhất |
 | **Expo Go** trên điện thoại | ❌ không bao giờ | redirect URI trong Expo Go là `exp://192.168.1.20:8081/--/`, và thân phận gói là `host.exp.exponent` nên không khớp package name + SHA-1 mà client Android đòi. Từ bản này app **không mở luồng Google trong Expo Go nữa**: `GoogleLoginButton` kiểm `Constants.executionEnvironment === ExecutionEnvironment.StoreClient` và toast giải thích thay vì đưa người dùng vào trang lỗi của Google. Đây là giới hạn của Expo Go, không phải bug của app. |
-| **Development build** trên điện thoại | ⏳ code app đã sẵn (mục 6.B), còn thiếu client Android + một lượt build | Trên máy, `useIdTokenAuthRequest` chuyển sang luồng authorization-code + PKCE và **tự đổi code lấy id_token mà không cần client secret** (`node_modules/expo-auth-session/build/providers/Google.js`, `useAuthRequest` + `AccessTokenRequest`). Client loại **Web application** thì chết ở bước đổi code đó, nên app phải xin thêm client loại Android/iOS — đây chính là 6.B đã cài. Redirect mặc định của thư viện là `com.playtogether.app:/oauthredirect`; app gửi redirect dạng AppAuth derive từ client ID (`com.googleusercontent.apps.<id>:/oauth2redirect`) và `app.config.ts` khai scheme đó. |
+| **Bản dựng thật (APK)`preview`** trên điện thoại | ✅ consent + callback chạy 06/11/2026; ⚠️ mọi request API bị Android chặn cho tới build #4 | Trên máy, `useIdTokenAuthRequest` chuyển sang luồng authorization-code + PKCE và **tự đổi code lấy id_token mà không cần client secret** (`node_modules/expo-auth-session/build/providers/Google.js`, `useAuthRequest` + `AccessTokenRequest`). Client loại **Web application** thì chết ở bước đổi code đó, nên app phải xin thêm client loại Android/iOS — đây chính là 6.B đã cài. Redirect mặc định của thư viện là `com.playtogether.app:/oauthredirect`; app gửi redirect dạng AppAuth derive từ client ID (`com.googleusercontent.apps.<id>:/oauth2redirect`) và `app.config.ts` khai scheme đó — đã đo: `npx expo config --type public` với client Android trong env trả `scheme = ["playtogether","com.googleusercontent.apps.606945851708-cj8l2b67qie9ougprndr7vn1k9uof7k1"]`. **Cái bẫy chỉ bản release mới có**: Android 9+ mặc định cấm HTTP không mã hoá, mà API dev là `http://<lan-ip>:3000`, nên app báo "Không thể kết nối máy chủ" dù server vẫn sống — Expo Go không bị vì manifest của chính Expo Go cho phép cleartext. Xem mục 6.D. |
 
 ## 6. Chạy trên máy thật — đã chốt 6.B (04/11/2026), 6.A ghi lại để dành
 
-Điểm chung cả hai: **Expo Go không bao giờ chạy được** (mục 5), và đều cần một *development
-build* do chính tay bạn dựng, vì nó đòi tài khoản Expo và quyền sửa project Google Cloud.
+Điểm chung cả hai: **Expo Go không bao giờ chạy được** (mục 5), và đều cần một *bản dựng thật* do
+chính tay chủ tài khoản dựng, vì nó đòi tài khoản Expo và quyền sửa project Google Cloud.
 `eas.json` đã nằm trong repo với bốn profile: `development` (dev client — APK Android / app simulator
 iOS), `development-device` (dev client dựng cho máy thật iOS), `preview` (APK nội bộ chia tay ngắn
 hạn), `production` (bản submit store).
 
+**Ngày 06/11/2026 đã chạy thật, và bản dùng được là `preview`, không phải `development`.** Lý do rất
+đời thường: profile `development` đặt `developmentClient: true` nên EAS từ dựng với
+`Install expo-dev-client manually` — thư viện đó **cố ý không cài** (mục 6.A giải thích: cài vào là
+`npx expo start` nhắm dev build thay vì Expo Go). Profile `preview` cho ra một APK độc lập, cài là chạy,
+không phải kéo Metro. Hai profile cũng dùng **chung một keystore** (`Build Credentials A6ccPXjA8H
+(default)`), nên SHA-1 lấy từ bản `preview` khai cho client Android là đúng cho mọi bản sau này.
+
 ```bash
 cd play-together-fe
-npx expo install expo-dev-client   # profile "development" cần nó (docs Expo, 03/11/2026)
 npx eas-cli login                  # tài khoản expo.dev của bạn
-npx eas-cli init                   # ghi extra.eas.projectId vào app.json
-npx eas-cli build --profile development --platform android
-npx expo start --dev-client        # hoặc --go nếu vẫn muốn chạy Expo Go
+npx eas-cli init                   # đã chạy 06/11/2026: tạo @manhnguyendev/play-together,
+                                   # ghi extra.eas.projectId + owner vào app.json
+npx eas-cli build --profile preview --platform android
 ```
+
+`eas.json` hiện khai `environment` trong profile (`development` → `development`, `preview` →
+`preview`): đó là cách EAS **Variables** biết bộ biến nào bơm vào lượt dựng. Bắt buộc phải đi đường này
+vì `.env` nằm trong `.gitignore` nên **không** được upload lên máy dựng — build log in ra
+`Environment variables … loaded from the "preview" environment on EAS` là bằng chứng duy nhất nhìn thấy
+được từ máy local. Biến đang có trong environment `preview`: `EXPO_PUBLIC_API_URL`,
+`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`.
 
 Chú ý cho đúng một hệ quả: docs Expo (sửa ngày 03/11/2026) ghi *"`npx expo start`, vì project đã có
 `expo-dev-client` nên lệnh này nhắm development build thay vì Expo Go*. Muốn tiếp tục chạy Expo Go cho
@@ -169,17 +182,49 @@ rồi tự đổi code lấy `id_token` (`fullResult.params.id_token`). **Phía 
 - Không có client Android/iOS thì nút tự về dạng hint nói thiếu biến nào — không mở một luồng
   không thể quay về.
 
-**Việc còn lại là phía tài khoản của anh** (tôi không tự làm được):
+**Việc phía tài khoản — cập nhật 06/11/2026.**
 
-1. Google Cloud → *Create Client* → **Application type: Android**, Package name
-   `com.playtogether.app` (`app.json` → `android.package`) + **SHA-1 của keystore mà bản dựng dùng**.
-   Build bằng EAS thì lấy SHA-1 ở `npx eas-cli credentials` (hoặc Play Console → Release → Setup →
-   App Integrity). Profile `development` và `production` có thể dùng hai keystore khác nhau — một
-   client Android cho phép khai nhiều SHA-1, cứ thêm cả hai.
-2. `play-together-fe/.env`: `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=<client Android>`;
-   `play-together-be/.env`: `GOOGLE_ANDROID_CLIENT_ID=<cùng một giá trị>` — `GoogleAuthService` đã nhận
-   danh sách audience sẵn (`src/modules/auth/google-auth.service.ts:29-34`), **API không sửa code**.
-3. `npx eas-cli build --profile development --platform android` rồi bấm nút trên bản dựng đó.
+1. ✅ **Đã tạo** OAuth client loại Android trong Google Cloud project `play-together-513312`:
+   Name `Play Together - Android`, Package name `com.playtogether.app`,
+   SHA-1 `4D:86:07:82:4F:65:21:E3:CF:E7:13:51:D4:55:02:E9:49:DF:9C:10`,
+   Client ID `606945851708-cj8l2b67qie9ougprndr7vn1k9uof7k1.apps.googleusercontent.com`.
+   Giá trị này **không** phải bí mật (client ID loại Android không có secret), nên ghi công khai ở đây
+   để lần sau khỏi phải dựng lại lấy SHA-1.
+   **Bắt buộc thêm một bước mà Console không tự làm:** sau khi tạo client Android, mở
+   *Advanced settings* và bật **Enable custom URI scheme** rồi Save. Client Android tạo mới mặc định **tắt**
+   tuỳ chọn này (Google ghi "not recommended for Android clients" vì họ đang đẩy sang loopback IP / App
+   Links), trong khi luồng AppAuth của `expo-auth-session` chỉ có thể dùng redirect
+   `com.googleusercontent.apps.<id>:/oauth2redirect`. Thiếu bước này thì Google trả thẳng trang
+   `400: invalid_request` — "Custom URI scheme is not enabled for your Android client" — và app không bao
+   giờ nhận được callback, nên không có toast nào của app cho lỗi này. Bật xong không cần build lại:
+   client ID giữ nguyên, scheme đã nằm sẵn trong `AndroidManifest.xml` của bản dựng.
+   Tái hiện để xác nhận (không cần điện thoại): tự dựng URL `accounts.google.com/o/oauth2/v2/auth` với
+   `response_type=code`, `client_id` = client Android, `redirect_uri` = đúng chuỗi AppAuth, `scope=openid
+   profile email`, kèm `code_challenge` + `code_challenge_method=S256`; mở trong trình duyệt → trước khi
+   bật là trang 400, sau khi bật là màn *Chọn tài khoản*. Lý do Google hiện ra là vì nó *không* redirect
+   về app ở bước này, nên chỉ có dựng request bằng tay mới đọc được message gốc (nó nằm trong tham số
+   `authError`, base64).
+   *Cách lấy SHA-1 trên máy này* — để còn lặp lại, vì hai đường sách vở đều không chạy được:
+   `npx eas-cli credentials` là menu **tương tác**, không có cờ nào in fingerprint; còn
+   `keytool` thì không tồn tại (máy không có JDK). Thay vào đó, dựng một lượt `preview`, tải APK về rồi
+   đọc **APK Signing Block**: APK ký bằng scheme v2 nên `META-INF/*.RSA` không tồn tại (không có chữ ký
+   v1), phải tự tìm `EOCD` → offset Central Directory → magic `APK Sig Block 42` → cặp có ID
+   `0x7109871a`, rồi cắt đúng 813 byte DER bắt đầu bằng `30 82 03 29` của certificate. Ba phép tính độc
+   lập cho cùng một kết quả: `X509Certificate(...).fingerprint` của Node, `openssl x509 -inform DER
+   -fingerprint -sha1`, và `openssl sha1` trên file DER. Lưu ý cạm bẫy khi tự parse: chuỗi `30 82` gặp
+   đầu tiên trong section là **`tbsCertificate`** (bị cắt mất `signatureAlgorithm` + `signatureValue`),
+   không phải certificate — nó vẫn `asn1parse` được nên nhìn tưởng đúng; bắt buộc phải thử
+   *parse ra X509* rồi mới lấy fingerprint.
+2. ⏳ **Vẫn còn** hai dòng `.env` (agent không sửa file env của bạn): `play-together-fe/.env` thêm
+   `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=606945851708-cj8l2b67qie9ougprndr7vn1k9uof7k1.apps.googleusercontent.com`;
+   `play-together-be/.env` thêm `GOOGLE_ANDROID_CLIENT_ID=<cùng một giá trị>` rồi khởi động lại API —
+   `GoogleAuthService` đã nhận danh sách audience sẵn (`src/modules/auth/google-auth.service.ts:29-33`),
+   **API không sửa code**. Thiếu dòng của API thì build vẫn mở được consent và vẫn nhận code, nhưng
+   token mint ra có `aud` là client Android nên `verifyIdToken` từ chối → app báo lỗi audience.
+3. ✅ **Đã dựng** bằng `npx eas-cli build --profile preview --platform android` (không phải
+   `development`, xem mục 6). Build #1 `09a07d85…` chỉ để lấy keystore; build #2 `a13a9792…` là bản có
+   client Android + scheme AppAuth biên dịch vào project native — **build lại là bắt buộc**, vì scheme
+   return là cấu hình native, không phải thứ đổi được lúc chạy.
 
 Điểm cần nhìn nếu build đầu tiên không quay về được: app gửi redirect dạng AppAuth vì tài liệu OAuth
 cho installed app của Google buộc dạng đó, còn **mặc định của thư viện** lại là
@@ -198,18 +243,66 @@ không bật `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` cho tới lúc đó.
 
 ### 6.C. Những việc chỉ chủ tài khoản làm được
 
-| Việc | Ở đâu | Vì sao tôi không tự làm |
+| Việc | Ở đâu | Tình trạng 06/11/2026 |
 | --- | --- | --- |
-| `eas login` + `eas init` | expo.dev | cần tài khoản và quyền thanh toán của bạn |
-| Create OAuth client **Android** (+ **iOS** nếu cần) | Google Cloud Console | project Google của bạn, tôi không có quyền sửa |
-| Lấy SHA-1 từ bản dựng và dán vào client Android | `npx eas-cli credentials` | chỉ tồn tại sau lần build đầu |
-| Điền `EXPO_PUBLIC_GOOGLE_*` vào `play-together-fe/.env`, `GOOGLE_ANDROID_CLIENT_ID`/`_IOS_` vào `play-together-be/.env` | máy bạn | file env local, không commit |
-| Bật lại Metro/API sau khi đổi env | máy bạn | biến `EXPO_PUBLIC_*` bị nhúng vào bundle lúc khởi động |
-| Bấm một lượt `eas build --profile development --platform android` | expo.dev | build tốn hạn mức tài khoản của bạn; máy này không có JDK/Android SDK nên không build cục bộ được |
+| `eas login` | expo.dev | ✅ bạn tự đăng nhập (agent không nhận session); `eas whoami` = `manhnguyendev` |
+| `eas init` | expo.dev | ✅ agent chạy khi đã có session — tạo `@manhnguyendev/play-together`, diff `app.json` được đưa ra trước khi kịp commit |
+| Create OAuth client **Android** | Google Cloud Console | ✅ agent điền form dưới sự cho phép tường minh ("tạo OAuth client Android đó đi"); trước đó lần bấm nào cũng bị chặn cho tới khi có câu này |
+| (+ **iOS** nếu cần) | Google Cloud Console | ⏳ mở: cần Bundle ID `com.playtogether.app` + tài khoản Apple Developer |
+| Lấy SHA-1 từ bản dựng | APK + openssl | ✅ xem mục 6.B.1 — `eas credentials` tương tác và `keytool` đều không dùng được ở đây |
+| Điền `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` vào EAS Variables | `eas env:set … --environment preview` | ✅ agent làm (client ID công khai, không phải secret) |
+| Điền `EXPO_PUBLIC_GOOGLE_*` vào `play-together-fe/.env`, `GOOGLE_ANDROID_CLIENT_ID` vào `play-together-be/.env` | máy bạn | ⏳ **còn chờ** — file env local của bạn, agent không sửa |
+| Bật lại API sau khi đổi env | máy bạn | ⏳ `EXPO_PUBLIC_*` nhúng vào bundle lúc dựng; `GOOGLE_ANDROID_CLIENT_ID` chỉ đọc lúc API khởi động |
+| Bấm `eas build --profile preview --platform android` | expo.dev | ✅ 2 lượt (hạn mức Android 15 lượt/tháng của tài khoản Free; `eas account:usage manhnguyendev` là lệnh xem) |
+| Cài APK lên máy và bấm nút Google | máy bạn | ⏳ vòng test của bạn |
 | ~~Chọn 6.A hay 6.B~~ | — | **đã chốt 6.B (04/11/2026)** vì vòng test máy vẫn cần Expo Go; còn mở: Android thôi hay cả iOS |
 
 Client ID **không** phải bí mật (nó hiện ra trong bundle), nên việc điền vào `.env` là an toàn; điều
 kiêng tuyệt đối là **client secret** — không đưa vào app, không commit, không gửi trong chat.
+
+### 6.D. Hai bẫy chỉ xuất hiện khi chạy bản release trên máy (06/11/2026)
+
+Cả hai đều vô hình với Expo Go và vô hình với test web, nên chỉ hiện ra ở lượt bấm trên điện thoại.
+
+**1) expo-router nuốt callback OAuth.** Triệu chứng: Google đồng ý, quay về app, và app hiện màn
+`Unmatched Route / Page could not be found` bằng **tiếng Anh** (màn mặc định của framework, không phải
+màn của app). Lý do: expo-router coi *mọi* URL hệ thống gửi vào app là một route, mà `/oauth2redirect`
+không có screen nào. Callback vẫn tới nơi — chuỗi `playtogether:///oauth2redirect?state=…&code=…` in ra
+là bằng chứng Google đã trả code thành công.
+Fix: `src/app/+native-intent.ts` export `redirectSystemPath` (hook có sẵn của expo-router, xem
+`node_modules/expo-router/build/types.d.ts`: trả về giá trị falsy thì **không điều hướng**), chặn đúng
+path callback và trả nguyên văn mọi link khác để deep-link thông báo không bị liên luỵ. Có test
+`src/features/auth/__tests__/nativeIntent.spec.ts` giữ cả hai chiều.
+
+**2) Android cấm HTTP không mã hoá, và Expo không có khoá app.json để mở.** Triệu chứng: toast của
+chính app — `Không thể kết nối máy chủ. Kiểm tra EXPO_PUBLIC_API_URL và kết nối mạng.` — trong khi
+`curl http://<lan-ip>:3000/api/v2/health` từ máy tính vẫn `ok`. Đây **không** phải cấu hình sai và
+**không** phải server chết: `EXPO_PUBLIC_API_URL` được nhúng lúc dựng (đã kiểm trong
+`assets/index.android.bundle` của APK là có chuỗi `192.168.1.8:3000`), nên thứ chặn là nền tảng.
+Bằng chứng đọc từ file: giải `AndroidManifest.xml` (AXML binary) trong APK đã ký thì
+`usesCleartextTraffic`, `networkSecurityConfig`, `cleartextTrafficPermitted` **đều không có**, còn
+`INTERNET` thì có — control cho thấy phép đọc đúng. Android 9 (API 28) trở lên mặc định từ chối
+cleartext, và OkHttp mà RN dùng tuân thủ luật đó, nên request không rời khỏi thiết bị. Expo Go sống
+sót vì manifest của *chính Expo Go* cho phép cleartext — đây là lý do defect này chưa từng xuất hiện
+trong suốt các vòng test Expo Go.
+Fix: `plugins/withAndroidCleartext.js` (một config plugin `withAndroidManifest` rất nhỏ) ghi
+`android:usesCleartextTraffic="true"` vào `<application>`, khai trong `app.json → expo.plugins`.
+**Vì sao phải viết plugin chứ không phải bật config:** docs SDK 58 tra từ khoá `cleartext` trả "not
+present", và `grep` trong `@expo/config-types` + `@expo/config-plugins` + `@expo/prebuild-config` không
+có chỗ nào đọc một property cleartext nào — nên không có đường cấu hình, chỉ có đường plugin.
+Đã kiểm bằng `npx expo prebuild --platform android`: manifest sinh ra có thuộc tính và **vẫn còn**
+intent-filter của scheme AppAuth (hai thay đổi không triệt tiêu nhau).
+**Giá phải trả và điều kiện gỡ:** thuộc tính này mở cleartext cho *toàn bộ* app, không giới hạn host —
+chấp nhận được với backend LAN của đồ án, nhưng là một bước lùi bảo mật nếu app ra store. Khi API chạy
+HTTPS thật thì **xoá plugin và bỏ dòng khai trong `app.json`**; comment trong file plugin nhắc đúng điều
+đó. (Con đường chặt hơn — `network_security_config.xml` cho phép cleartext theo từng host — không hợp ở
+đây vì IP LAN của máy anh đã đổi vài lần trong project này.)
+
+**Bài học quy trình:** hai lỗi này nối tiếp nhau và mỗi lần chỉ hiện một cái, nên thứ đáng tin là
+**tầng gần nhất chưa được kiểm chứng**, không phải suy đoán từ triệu chứng. Màn tiếng Anh → lỗi của
+framework; toast tiếng Việt của app → app đã chạy và đã gọi đi nơi khác; log server im lặng → hoặc
+request không tới, hoặc API không log request thành công (đúng ra là vế sau, nên nó không phải bằng
+chứng).
 
 
 ## 7. Tài khoản Google rồi mới đặt mật khẩu

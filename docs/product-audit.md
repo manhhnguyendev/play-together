@@ -2982,7 +2982,1175 @@ sẽ xoá **trước khi** xoá, và từ chối mọi đường có `.bak` tron
 - **Nạp/rút thật**: không seed withdrawal nào (`pendingUserWithdrawals = 0`); màn rút tiền vẫn cần
   bấm thật để test.
 
+## 45. #7 (nối §43) — EAS đã link, SHA-1 lấy được từ APK, client Android đã tồn tại
+
+§43 dừng ở "code app xong, còn chờ phía tài khoản". Ngày 06/11/2026 đã đi hết phần tài khoản, trừ hai
+dòng `.env` mà chỉ chủ máy được sửa.
+
+**Vì sao phải dựng tới hai lần.** Client Android cần SHA-1 của keystore, mà keystore EAS chỉ sinh ra
+khi có lượt dựng đầu — vòng trứng/con gà, không cách nào rút xuống một build. Build #1
+`09a07d85-6df4-46fc-9f54-e490669af26c` do đó chỉ để lấy fingerprint; build #2
+`a13a9792-86e7-4e6f-a496-1d78f3fdf2cf` là bản thật: có `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` và
+**scheme return AppAuth biên dịch vào project native** (`app.config.ts` thêm
+`com.googleusercontent.apps.<id>` vào `scheme`) — đổi scheme là chuyện của project native nên không tồn
+tại đường nào ngoài dựng lại.
+
+**Profile dựng là `preview`, không phải `development`.** `eas build --profile development` chết ngay với
+`Install expo-dev-client manually`; thư viện đó cố ý chưa cài vì §43 đã ghi rõ cài vào là
+`npx expo start` nhắm dev build thay vì Expo Go, mà vòng test của cả app đang chạy qua Expo Go.
+`preview` cho APK độc lập (không cần Metro), và quan trọng hơn: hai lượt dựng dùng **chung một
+keystore** — log in `Using Keystore from configuration: Build Credentials A6ccPXjA8H (default)` — nên
+SHA-1 khai một lần là đúng cho mọi bản sau.
+
+**Lấy SHA-1 khi không có cả `eas credentials` lẫn `keytool`.** `eas credentials` là menu tương tác
+(không có cờ in fingerprint), và máy này không có JDK nên `keytool` không tồn tại. Đường thực dụng: tải
+APK về, đọc `APK Signing Block`. APK chỉ ký v2 (`0x7109871a`) nên `META-INF/*.RSA` không có gì cả — ký
+v1 không tồn tại ở bản release. Duyệt theo cấu trúc: `EOCD` → offset Central Directory → xác
+`magic = "APK Sig Block 42"` → `size` ngay trước magic → suy ra đầu block → tách các cặp
+`(u64 length, u32 id)`. Cạm bẫy thật sự: chuỗi `30 82` gặp đầu tiên trong section là
+**`tbsCertificate`** chứ không phải certificate — nó thiếu `signatureAlgorithm` + `signatureValue`,
+nhưng `openssl asn1parse` vẫn đi hết nên nhìn tưởng thành công, còn `openssl x509` thì báo
+`Could not find certificate`. Phải thử **parse ra X509** rồi mới tin. Certificate đúng là khối 813 byte
+DER (`30 82 03 29`), RSA 2048, DN rỗng (`C= ST= L= O= OU= CN=` — keystore EAS sinh vậy),
+serial `2A305AEA9513107A`, notBefore `2026-11-05 17:10:37 GMT` — trùng khít thời điểm build #1 tạo
+keystore, chính là bằng chứng "đúng keystore của project này".
+
+**Đã tạo trong Google Cloud (`play-together-513312`).** OAuth client loại Android: Name
+`Play Together - Android`, Package name `com.playtogether.app`, SHA-1
+`4D:86:07:82:4F:65:21:E3:CF:E7:13:51:D4:55:02:E9:49:DF:9C:10`, Client ID
+`606945851708-cj8l2b67qie9ougprndr7vn1k9uof7k1.apps.googleusercontent.com`. Client ID loại Android đi
+cùng PKCE nên **không có secret**; nó hiện trong bundle, vì vậy ghi công khai ở đây là hợp lệ và tiết
+kiệm cho lần sau một lượt build. Danh sách clients sau khi tạo: 2 dòng (Web + Android), và trang chi
+tiết hiển thị đúng package + SHA-1 đã nhập.
+
+**Thay đổi trong repo.** `app.json` nhận `extra.eas.projectId` + `owner` (và `eas init` tự thêm
+`extra.router.asyncRoutes.web` — không phải em viết); `eas.json` khai `environment` cho profile
+`development` và `preview`. Khóa `environment` đó là mắt xích thật: **`.env` nằm trong `.gitignore` nên
+không được upload lên máy dựng**, build log phải in ra `Environment variables with visibility "Plain
+text" and "Sensitive" loaded from the "preview" environment on EAS: …` thì mới có bằng chứng. Ba biến
+đang nằm trong environment `preview` (và hai biến trong `development`): `EXPO_PUBLIC_API_URL=http://<pc-ip>:3000/api/v2`,
+`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`. **Chưa commit.**
+
+```
+Config: npx expo config --type public (override env per-process, không sửa .env)
+        → scheme = ["playtogether","com.googleusercontent.apps.606945851708-cj8l…"]
+        → android.package = com.playtogether.app · extra.eas.projectId khớp project đã tạo
+Fingerprint: X509Certificate(...).fingerprint (Node) · openssl x509 -fingerprint -sha1 ·
+             openssl sha1 trên file DER  →  ba giá trị trùng một
+Build   : #1 09a07d85 FINISHED, APK 104.924.661 byte — bản này chỉ để lấy keystore
+          #2 a13a9792 FINISHED, APK 104.925.037 byte, dùng chung keystore A6ccPXjA8H (default)
+          Kiểm **trong file APK**, không tin log: unzip `assets/index.android.bundle` +
+          `AndroidManifest.xml` rồi tìm chuỗi. build#2 bundle có androidClient=YES, webClient=YES,
+          apiUrl=YES; build#2 manifest có appAuthScheme=YES (scheme return đã biên dịch vào native);
+          build#1 cả hai đều `no` — control âm cho thấy phép thử thật sự phân biệt được, không phải
+          khớp do chuỗi tình cờ. Bundle không chứa nguyên văn scheme (đúng như thiết kế: nó được nối
+          lúc chạy từ client ID), nên phải soi manifest chứ không chỉ soi bundle.
+Gate FE : tsc 0 · expo lint 0 · jest 8 suite / 75 ca (googleNativeRedirect.spec giữ app.config.ts
+          và src/ khớp nhau — chính là mắt xích vừa dựng lại)
+Hạn mức : eas account:usage manhnguyendev → Android 0/15 trước khi build, không phải hết credit
+API     : /api/v2/health qua <pc-ip>:3000 → {"status":"ok","database":"up"}, /users trả player
+          đã có ratingCount/ordersCount/rankingPoints từ seed §44
+```
+
+### 45.1 Bản dựng đầu trên máy báo `400 invalid_request` — và thủ phạm là một mặc định mới của Google
+
+Anh cài APK build #2, bấm **Đăng nhập bằng Google**, Google chặn bằng trang *Lỗi 400: invalid_request*.
+Không phải app sai: trang lỗi của Google ẩn lý do trong tham số `authError` (base64), giải mã ra câu
+chặt chẽ: **"Custom URI scheme is not enabled for your Android client."**
+
+Cách tái hiện không cần điện thoại (lặp lại được khi nghi ngờ): chính request mà
+`useIdTokenAuthRequest` gửi lên `accounts.google.com/o/oauth2/v2/auth` dựng được bằng tay từ code —
+`response_type=code` + `client_id` = client Android + `redirect_uri` =
+`com.googleusercontent.apps.<id>:/oauth2redirect` + `scope=openid profile email` + PKCE
+(`code_challenge_method=S256`). Mở URL đó trong trình duyệt: **trước** khi sửa thì Google trả trang lỗi,
+**sau** khi sửa thì Google hiện màn hình *Chọn tài khoản — Tiếp tục tới Play Together* với đúng test user
+`manhnguyendt309@gmail.com`. Khác biệt nằm ở duy nhất một cấu hình tài khoản.
+
+**Nguyên nhân:** Google đã đổi mặc định cho OAuth client loại **Android** tạo mới — tuỳ chọn nhận
+redirect bằng *custom URI scheme* (chính là dạng AppAuth mà mọi thư viện installed-app dùng) giờ **tắt
+theo mặc định**, Console ghi thẳng "This setting is not recommended for Android clients" và đặt nó sau
+*Advanced settings → Enable custom URI scheme*. Client Android em tạo chiều 06/11 nằm trong nhóm đó, nên
+mọi request AppAuth bị từ chối trước khi tới được app. Bật công tắc + Save là hết; **không đổi client ID
+nên không phải build lại app**, và giá trị có hiệu lực ngay trong phiên (Google quảng cáo "5 phút tới vài
+giờ" nhưng phép thử tái hiện cho thấy nó bật lên tức thì).
+
+**Bài học về hướng chính sách:** Google đang đẩy app Android sang loopback IP hoặc App Links (https +
+`assetlinks.json`, cần tên miền công khai) và tự coi custom scheme là đường cũ. Nếu một ngày Google gỡ
+hẳn checkbox này, 6.B hết đường và phải chuyển sang 6.A (thư viện Google native, dùng Play Services nên
+không có redirect URI) — cái giá đã ghi ở §43 là mất Expo Go cho mọi màn khác. Ghi lại để lần sau khỏi
+đi tìm lỗi trong app.
+
+**Đã kiểm chứng thêm một điểm mà chuỗi trong manifest không trả lời được:** scheme có mặt trong
+`AndroidManifest.xml` chỉ chứng tỏ nó nằm trong string pool, chưa chứng tỏ có `intent-filter` nào nhận
+nó. Em chạy `npx expo prebuild --platform android --no-install` (có override
+`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` theo process, không sửa `.env`) rồi đọc manifest sinh ra:
+`MainActivity` có `intent-filter` với `<data android:scheme="playtogether"/>` **và**
+`<data android:scheme="com.googleusercontent.apps.606945851708-cj8l…"/>` — Android sẽ trả callback về
+đúng activity. Dọn dẹp sau đó: prebuild **tự đổi `package.json`** (`android`/`ios` từ `expo start --android`
+thành `expo run:android` — sẽ làm hỏng vòng test Expo Go nếu để yên), em `git restore package.json` và xoá
+thư mục `android/` vừa sinh (folder này nằm trong `.gitignore`, sinh ra chỉ để đọc rồi bỏ).
+
+**Còn chờ** (cập nhật cuối mục sau §45.2).
+
+- ✅ **06/11 đã đóng — cấu hình env hai phía**, nhưng không phải theo cách §45 dự kiến:
+  `play-together-be/.env` có `GOOGLE_ANDROID_CLIENT_ID` (đối chiếu bằng sha256 của *cả chuỗi* với
+  client ID + hậu tố `.apps.googleusercontent.com` — khớp tuyệt đối, không in giá trị ra log), còn
+  `play-together-fe/.env` **không** có `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`: biến đó chỉ sống trong
+  EAS Variables (environment `preview`) nên chỉ bản dựng trên mây thấy được. Vòng local thì Metro export
+  đúng hai biến (`env: export EXPO_PUBLIC_API_URL EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`), tức **chạy
+  `expo prebuild` tại chỗ mà không tự set biến Android sẽ sinh ra native project thiếu scheme return** —
+  bẫy này đã ghi ở §6.B, và là lý do mọi phép prebuild kiểm chứng trong các mục trên đều phải truyền
+  override theo process. Thiếu dòng phía API thì consent vẫn mở, code vẫn đổi được id_token, nhưng `aud`
+  là client Android nên `verifyIdToken` từ chối — lỗi nằm ở API, không phải app. Bằng chứng hiện tại:
+  token giả gửi lên `/auth/google` trả **401** chứ không **503**, tức API đã đọc được client và đã tới
+  bước verify.
+- ✅ **06/11 đã đóng — cài APK và bấm nút**: đã cài thật, đã bấm thật, và hai lỗi chỉ lộ ra ở lượt đó
+  (§45.2). `redirect_uri_mismatch` mà §45 lo lắng **không** xảy ra — Google chấp nhận redirect AppAuth
+  ngay khi bật custom URI scheme.
+- **Hàng đợi Free của EAS**: build #1 nằm `in queue` ~70 phút trước khi chạy. Không phải lỗi cấu hình,
+  cũng không phải hết hạn mức — đừng dựng lại khi thấy `in queue`, chỉ cần `eas build:list`.
+- **iOS** vẫn mở: cần client loại iOS (Bundle ID `com.playtogether.app`) + tài khoản Apple Developer.
+
+### 45.2 Hai lỗi bản release trên máy thật: router nuốt callback, rồi Android chặn HTTP
+
+Cài build #2 → **Đăng nhập bằng Google** → consent chạy hết, Google chấp nhận redirect AppAuth (§45.1),
+nhưng thứ hiện lên là màn **"Unmatched Route — Page could not be found"** với URL
+`playtogether:///oauth2redirect?state=…&code=…`. Fix xong, build #3 đi tiếp được một bước nữa rồi dừng ở
+toast **"Không thể kết nối tới máy chủ: Kiểm tra EXPO_…"**. Hai lỗi này *đều không tồn tại* trong Expo Go,
+và cả hai đều nằm ngoài mọi lời nhắc của thư viện — ghi lại đủ để lần sau không phải mất hai lượt dựng.
+
+**(1) expo-router coi callback OAuth là một route.** Mọi URL hệ thống gửi vào app đều được router đưa qua
+`redirectSystemPath` rồi điều hướng; `/oauth2redirect` không có màn hình nào đứng sau nên router kéo app
+vào trang 404 nội bộ của nó, đè lên màn đăng nhập ngay lúc `expo-auth-session` đang đổi code — trình
+`linking.js:154-176` guard bằng `if (href) listener(href)`, nên chỉ cần trả về falsy là router tự đứng
+ngoài (thứ mà luồng này không cần: chính hook của `expo-auth-session` đã nghe sự kiện `url` rồi).
+Fix: `play-together-fe/src/app/+native-intent.ts` — trả `null` khi path chứa `oauth2redirect`, giữ
+nguyên mọi path khác. Kèm `src/features/auth/__tests__/nativeIntent.spec.ts`: 2 callback (một của AppAuth
+scheme, một của scheme `playtogether` — đúng hai dạng mà máy có thể nhận) → `null`; 2 link thường
+(`/orders/<id>`, `playtogether://profile`) → không đổi.
+*Điều chỉnh lại thói quen kiểm chứng:* không được dùng chuỗi `redirectSystemPath` trong bundle làm bằng
+chứng — bản thân expo-router chứa đúng định danh đó ở chỗ gọi, nên phép đếm chuỗi không phân biệt được app
+có file fix hay không (build #3 đo ra `utf8=1`, con số đó vô nghĩa). Bằng chứng thật là **hành vi trên
+máy**: build #3 hết trang 404 và tiến tới bước gọi API. Chuỗi binary chỉ đáng tin khi chuỗi đó *độc quyền*
+của thay đổi (client ID, IP LAN, scheme AppAuth).
+
+**(2) Android cấm HTTP rõ văn bản, và Expo SDK 58 không có chỗ khai báo.** Đo trực tiếp trong APK build #3
+(`unzip` rồi đọc `AndroidManifest.xml` dạng binary + `assets/index.android.bundle`):
+
+```
+manifest  usesCleartextTraffic           utf8=0  utf16=0   ← vắng mặt, đúng giả thuyết
+manifest  network_security_config        utf8=0  utf16=0
+manifest  android.intent.action.VIEW     utf8=0  utf16=1   ← control dương: đúng file, đúng cách đọc
+manifest  com.googleusercontent.apps     utf8=0  utf16=1   ← control dương thứ hai
+bundle    192.168.1.8:3000               utf8=1  utf16=0   ← URL LAN đã biên dịch vào app
+bundle    localhost:3000                 utf8=0  utf16=0   ← control âm: không phải fallback nào sót lại
+bundle    android client id              utf8=1  utf16=0
+```
+
+String pool của AXML lưu chuỗi ở UTF-16, nên **mọi** phép đếm UTF-8 trên manifest trả 0 — hai control dương
+(chuỗi `VIEW` và scheme AppAuth) chính là thứ biến cái `0` ở dòng đầu thành bằng chứng thay vì thành tiếng
+sóng. TargetSdk ≥ 28 mặc định từ chối plain HTTP, app lại trỏ `http://<pc-ip>:3000`; Expo Go không bị vì
+manifest của *chính Expo Go* cho phép cleartext — nghĩa là cả vòng test Expo Go chưa từng đi qua cổng này.
+Expo SDK 58 không lộ key `app.json` nào cho việc đó (`@expo/config-plugins` chỉ *khai báo* thuộc tính
+`android:usesCleartextTraffic` trong kiểu `build/android/Manifest.d.ts:80`, chứ không có chỗ nào trong
+`app.json` đọc tới nó), nên buộc phải có config plugin: `plugins/withAndroidCleartext.js` (ghi thuộc tính vào
+`<application>` qua `withAndroidManifest`) và nối vào `expo.plugins` trong `app.json`.
+**Cái giá:** bật cleartext cho *mọi* domain của bản dựng, không riêng IP LAN — chấp nhận được với bản dev
+nội bộ, và điều kiện gỡ đã ghi thẳng trong comment của plugin: API chạy HTTPS là xoá plugin.
+Kiểm tại chỗ bằng `npx expo prebuild --platform android --no-install --clean`: manifest sinh ra có
+`android:usesCleartextTraffic="true"` **và** vẫn còn 1 chuỗi `com.googleusercontent.apps` — hai thay đổi
+không triệt tiêu nhau. Build #4 `e6ddd4b9` đang chạy để đo lại đúng hai chuỗi đó *trong APK*, không tin log.
+
+**(3) Tầng thứ ba của "không gọi được API": chính cái PC này.** Lúc chuẩn bị giao build #3,
+`curl http://192.168.1.8:3000/api/v2/health` treo (exit 28) trong khi tiến trình API **vẫn sống**. Dấu hiệu
+lặp lại đúng lần thứ hai (instance `start:dev --watch` tối qua cũng treo kiểu đó): tiến trình còn, socket
+vẫn nhận kết nối, nhưng event loop không trả lời; `netstat -ano` thì **không** liệt kê LISTENING nào — trên
+máy này netstat không phải nguồn sự thật, curl mới là nguồn sự thật. Em tắt đúng PID mà log của *chính*
+tiến trình đó ghi (`[Nest] 19160` trong `.data/api-run.log`) rồi khởi động lại ẩn, xuất log ra file; sau đó
+health trả `{"status":"ok","database":"up","uptimeSeconds":3}`, `OPTIONS /auth/google` → 204, token giả →
+401. **Không đụng tới PID 17216** (`node dist/main.js`): chuỗi cha đưa nó về
+`pnpm --filter @budget-nest/server start` — cùng một mẫu lệnh, khác chủ; tắt nhầm là sập dự án khác trên
+cùng máy.
+Rút kinh nghiệm cho mọi báo lỗi "app không tới được server": có ba tầng phân biệt — API chết, Android chặn
+HTTP, app sai URL — và thứ tự loại trừ luôn bắt đầu từ chính cái PC này vì phép đo đó rẻ nhất (`curl`
+health). Nếu PC tự gọi được mà app vẫn báo lỗi thì hai nghi phạm còn lại đều là thứ *không bao giờ xuất
+hiện trong log API*: chính sách cleartext của Android (mục (2) ngay trên) và URL đã biên dịch cứng vào
+bundle.
+
+**Còn chờ.**
+
+- ✅ **06/11 đã đóng — build #4** (`e6ddd4b9`, FINISHED 14:50:50Z): đo lại trong APK đã ký, đúng hai chuỗi
+  cần thấy, vẫn dùng control dương UTF-16 như bảng trên:
+
+  ```
+  manifest  usesCleartextTraffic      utf8=0  utf16=1   ← build #3 là 0/0; plugin đã vào bản dựng
+  manifest  network_security_config   utf8=0  utf16=0
+  manifest  com.googleusercontent.apps utf8=0 utf16=1   ← scheme return còn nguyên
+  manifest  android.intent.action.VIEW utf8=0 utf16=1
+  bundle    192.168.1.8:3000          utf8=1  utf16=0
+  bundle    localhost:3000            utf8=0  utf16=0   ← control âm
+  bundle    android client id         utf8=1  utf16=0
+  ```
+- **Group G / Docker / iOS / deploy công khai**: vẫn như các mục trước, không đổi.
+
+### 45.3 "API tự treo" hoá ra là một deadlock thật: đọc config *bên trong* transaction trên PGlite
+
+Đêm qua em ghi ở §45.2 rằng máy là tầng thứ ba gây lỗi kết nối. Đúng một nửa: máy chỉ là nơi *lộ ra*.
+Sau ba lần dựng lại hiện trường, nguyên nhân là code, và nó nằm sẵn trong repo từ hồi làm cửa sổ đối soát
+(§3), chỉ chờ dữ liệu seed (§44) để kích hoạt.
+
+**Dấu hiệu.** Mỗi lần bật API bằng `node dist/main.js`, `/health` trả `database:"up"` được ~30–60 giây rồi
+**mọi** địa chỉ (`127.0.0.1`, `localhost`, `192.168.1.8`) cùng timeout — curl exit 28 chứ không phải 7, tức
+kernel vẫn nhận kết nối, còn ứng dụng thì không. Tiến trình sống, **CPU đứng nguyên** (`(Get-Process -Id
+…).CPU` trả 5.234375 rồi không tăng sau 4 giây), RAM còn 4.9/16 GB. `netstat -ano` không liệt kê LISTENING
+nào, kể cả các server khác đang chạy — trên máy này netstat không phải nguồn sự thật, đừng kết luận gì từ nó.
+
+**Phép thử A/B.** `JOBS_ENABLED=false` → 8/8 probe sạch trong 178 giây. `JOBS_ENABLED=true,
+JOBS_INTERVAL_MS=5000` → chết ngay sau một tick. Vậy thủ phạm là `BackgroundJobs`, không phải môi trường.
+
+**Đo tới từng câu lệnh** (chỉ vá vào `dist/` đã build, `src/` không đổi; về sau `npm run build` đè lại):
+
+```
+[JOBDBG 15:03:32.688] start {}
+[JOBDBG 15:03:32.725] expireDue          {expired:0, ms:38}
+[JOBDBG 15:03:32.728] startDueSessions   {started:0, ms:41}
+[ORDDBG 15:03:32.744] afterLockSelect  {id:"dd3ddb18-…"}
+[ORDDBG 15:03:32.763] afterOrderUpdate {id:"dd3ddb18-…"}
+[ORDDBG 15:03:32.793] afterUsersUpdate {id:"dd3ddb18-…"}
+        … im lặng vĩnh viễn ở đây, và /health chết cùng lúc
+```
+
+Câu tiếp theo sau `afterUsersUpdate` chính là thủ phạm: `orders.service.ts` đọc
+`this.configs.getNumber(CONFIG_KEYS.disputeWindowHours)` **không truyền `tx`**, dù hàm đã có tham số
+executor (`getNumber(key, executor = this.db)`). Không truyền thì nó đi `all()` → `this.db.select()` —
+một **kết nối thứ hai**, mà PGlite chỉ có đúng một kết nối và kết nối đó đang bị transaction bao ngoài
+giữ. Nó chờ vô hạn, và mọi query sau đó (kể cả `/health`, vốn báo cáo `database`) xếp hàng phía sau.
+
+**Vì sao suite e2e xanh từ trước tới giờ.** `CACHE_TTL_MS = 15 phút` trong `SystemConfigService`: khi cache
+ấm, `getNumber` không chạm DB nên deadlock không xảy ra. `dispute-window.e2e-spec.ts` login hàng loạt trước
+khi gọi `runJobs()` ⇒ cache luôn ấm. Còn dev thì **vừa khởi động là tick đầu tiên chạy với cache lạnh** ⇒
+đúng 100% treo.
+
+**Vì sao trước seed thì không treo.** `openDisputeWindow` chỉ vào transaction khi có đơn `LIVE` quá
+`scheduledEndAt`. Trước §44 không có; sau seed dev DB còn **2** đơn như vậy (đo được).
+
+**Đã sửa (4 file):**
+- `src/modules/orders/orders.service.ts:838` — truyền `tx` cho `getNumber` trong `openDisputeWindow`.
+- `src/modules/orders/orders.service.ts:592` — cùng lỗi trong `endEarly` (đường "Kết thúc sớm" của người
+  thuê, liên quan tiền): một `getNumber` nữa thiếu `tx`.
+- `src/modules/system-config/system-config.service.ts` + `src/common/security/token.service.ts:103` —
+  `isMaintenance()` cũng đọc config qua kết nối dùng chung và đang nằm trong transaction của `rotate()`
+  (đường refresh token). Thêm tham số executor vào `isMaintenance` rồi truyền `tx`; đây là bug *tiềm ẩn*
+  (nó chỉ treo khi cache lạnh giữa lúc refresh), kiểm chứng bằng chính phép thử: trước khi sửa, gọi
+  `/auth/refresh` vẫn 200 **vì** cache ấm — nên em không sửa kiểu "đoán", mà sửa vì cùng một cơ chế.
+- `test/dispute-window.e2e-spec.ts` — thêm ca *"opens the window when the config cache is cold"*: tạo đơn
+  quá hạn, gọi `harness.app.get(SystemConfigService).invalidate()` ngay trước `runJobs()`, rồi đòi đơn
+  chuyển `DISPUTED`. **Đã chứng minh ca này bắt được bug**: bỏ đúng một chỗ truyền `tx` thì suite không
+  in nổi gì sau 9 phút (jest không teardown được vì kết nối còn bị giữ), trong khi với code đã sửa nó xanh
+  trong 75 ms và cả suite 6/6.
+
+**Kiểm chứng bằng artifact, không tin suy luận.** `npm run build` → grep `ORDDBG|JOBDBG` trong `dist/` =
+0 (dọn sạch instrument). Khởi động lại API với cấu hình mặc định (job 30 s), tick đầu log
+`jobs: expired=0 started=0 disputed=2 completed=0 released=0` lúc 22:15:07 — job **chạy xong đúng phần việc
+mà nó treo ở tick đầu tiên của mọi lần khởi động**, và 2 đơn đối soát thật sự được mở. Sau đó health
+uptime 89 s rồi 116 s,
+`/auth/login` 200, `/auth/refresh` 200, token Google giả 401, `err.log` 0 byte.
+
+**Việc nên làm tiếp (chưa làm, ghi lại để khỏi quên).** Quét hết lớp lỗi "query không dùng tx bên trong
+tx": em có hai script TEMP (`scan-tx-reentrancy.mjs`, `scan-tx-calls.mjs`) đếm block bằng brace — chạy
+toàn `src/` ra đúng 3 chỗ, 2 đã sửa, 1 (`isMaintenance`) đã sửa; phần còn lại là dương giả vì `tx` nằm ở
+dòng kế. Nếu muốn chốt lâu dài, đáng biến phép kiểm đó thành lint rule hoặc test tĩnh trong CI hơn là script
+vặt ở TEMP.
+
+**Một lần suýt phá dữ liệu, ghi lại để đừng lặp lại:** để đếm số đơn overdue, em đã mở *đúng cluster PGlite
+của API* bằng một tiến trình node thứ hai (`new PGlite('.data/pgdata-fresh')`) trong khi API đang giữ nó.
+Số đọc ra có vẻ đúng và API vẫn sống, nhưng đây là engine nhúng một người ghi — phép an toàn là gọi API
+(admin endpoint) hoặc đọc khi API đã dừng, không phải mở song song.
 
 
 
 
+
+
+
+
+
+---
+
+## 46. Upload ảnh thật (lưu đĩa cục bộ) + avatar cho toàn bộ bản ghi, và bốn defect chỉ lộ ra khi bấm thật
+
+**Yêu cầu.** "Làm tất cả các chỗ liên quan tới upload hình ảnh, giờ cứ cho lưu ảnh ở local đi, sau này
+sẽ sử dụng bên thứ 3 sau" + "set all avatar cho các record hiện tại cho nó phong phú hơn, hình ảnh bạn
+tự chọn rồi thêm".
+
+### 46.1 Trước khi sửa: tính năng này chưa từng chạy được
+
+`src/features/profile/pickImages.ts` (bản đã commit) nối `data:image/jpeg;base64,…` vào trường
+`imageLink` rồi gửi lên `PATCH /users/me` — chú thích trong code nói thẳng là "không có Firebase
+Storage nên inline base64". Nhưng `users.dto.ts` chặn `avatarUrl` bằng `@IsUrl()`, và `@IsUrl` **không**
+chấp nhận data URI (đã đo, không đoán: ca control trong `test/uploads.e2e-spec.ts` gửi đúng chuỗi
+`data:image/jpeg;base64,…` và nhận `400 validation_failed`). Nghĩa là mọi lần đổi ảnh đại diện từ app
+bị API từ chối, còn app thì bắt lỗi chung chung nên người dùng chỉ thấy "Cập nhật thất bại".
+Đây đúng là loại "tương tác giả" mà brief cấm để lại: có nút, có toast, không có ảnh nào được lưu.
+
+### 46.2 Thiết kế: một interface, driver cục bộ, URL tương đối
+
+- `src/common/storage/image-storage.ts` — `IMAGE_STORAGE` + `ImageStorage.saveImage(file)`;
+  `StorageModule` (@Global) bind `LocalImageStorage`. Đổi sang S3/GCS/Cloudinary sau này là đổi
+  provider, không đụng controller, DTO hay client.
+- `LocalImageStorage` — kiểm tra theo thứ tự: có part `file` (`400 no_file_uploaded`) → kích thước
+  (`422 image_too_large`, trần `MAX_UPLOAD_MB` mặc định 5 MB, interceptor còn chặn ở 20 MB trước khi
+  nạp hết vào RAM) → MIME cho phép → **magic byte khớp MIME** (`422 unsupported_image_type`; một file
+  chỉ đổi phần đuôi thành .png vẫn bị bắt). Ghi ra `UPLOAD_DIR/<yyyy-mm>/<uuid>.<ext>` và trả
+  `/uploads/<yyyy-mm>/<uuid>.<ext>`.
+- `originalname` của multer cố ý không dùng: đó là chuỗi do client đặt, dễ mang `../`.
+- `serve-uploads.ts` đăng ký static **trước** `app.init()` — bản đầu dùng `@nestjs/serve-static` và
+  nhận 404 `not_found` của Nest router chính vì thứ tự này (e2e bắt được). Header:
+  `Cross-Origin-Resource-Policy: cross-origin` (app, bản web 8081 và admin 5174 là ba origin khác
+  nhau; helmet mặc định để `same-origin` nên ảnh sẽ vỡ), `Cache-Control: public, max-age=86400`,
+  `index:false`, `dotfiles:'deny'`.
+- Lưu **đường dẫn gốc tương đối**, mỗi client tự nối origin khi hiển thị (`resolveAssetUrl()` ở FE và
+  admin). Lý do: IP LAN của máy dev đổi (đã từng: .8), còn Google/CDN URL tuyệt đối thì giữ nguyên.
+  `is-image-url.ts` thay `@IsUrl` để chấp nhận cả hai hình thái này.
+
+### 46.3 Bốn defect mà chỉ bấm thật trên trình duyệt mới thấy
+
+Em chạy hết luồng trên trình duyệt thật (Expo web :8081 + admin :5174, API :3000), và cả bốn chỗ sau
+đều sai thật — không suy ra từ đọc code:
+
+1. **Ảnh thư viện tải nhầm host.** `mappers.ts` đã resolve avatar, nhưng `userService.getImagesOfUser`
+   trả `imageLink: image.url` nguyên trạng → browser xin `GET http://localhost:8081/uploads/…jpg` →
+   **404**, màn Hình ảnh hiện hai ô vuông trắng. Đã sửa (`resolveAssetUrl`) + spec mới
+   `src/api/services/__tests__/usersImages.spec.ts` giữ đúng quy tắc "đường dẫn tương đối phải trỏ về
+   API host, URL tuyệt đối thì giữ nguyên".
+2. **Ngày sinh bị lùi một ngày mỗi lần lưu.** Màn hình gửi `dateOfBirth.toISOString()`, service cắt
+   `slice(0, 10)`. Ở +07, nửa đêm 01/01/2000 = `1999-12-31T17:00Z` → cắt ra `1999-12-31`. Cột
+   `date_of_birth` là DATE nên mất luôn phần giờ. Sửa bằng `toCalendarDate()` / `parseCalendarDate()`
+   trong `src/lib/format.ts` (dùng lịch địa phương, không dùng UTC) và 4 ca test. **Bằng chứng vòng
+   ngoài:** DB đang đọc `2000-11-04` trước khi sửa; sau khi chọn 05/11/2000 và bấm CẬP NHẬT thì đọc
+   `2000-11-05`.
+3. **Lưu hồ sơ mà không chọn ảnh mới sẽ nhét URL tuyệt đối vào DB.** `save()` gửi lại `avatar` — mà
+   `avatar` là *giá trị hiển thị* đã nối origin — nên `avatarUrl` thành
+   `http://localhost:3000/uploads/…png`, đúng thứ thiết kế tương đối sinh ra để tránh. Sửa: không có
+   ảnh mới thì **bỏ hẳn trường** (API đã có sẵn `...(body.avatar ? {avatarUrl} : {})`). Đã dọn lại bản
+   ghi bị nhiễm.
+4. **Màn "Thông tin tài khoản" mở từ tải lạnh là form rỗng.** `useState(user?.name ?? '')` chạy trước
+   khi store hydrate xong, nên tên, giới tính, ngày sinh đều trắng và avatar hiện "?" — dù `/users/me`
+   trả 200 đầy đủ. Sửa bằng effect khoá theo `user.id` (ref `hydratedFor`), chỉ mồi form khi có id mới,
+   không ghi đè giữa lúc đang gõ.
+
+Kèm một bài học kiểm chứng: Metro chạy với `CI=1` **không watch**, nên sửa xong bundle vẫn là code cũ và
+phép thử đầu tiên cho kết quả sai. Phải grep `user-profile.bundle` thấy `toCalendarDate` (và không còn
+`toISOString`) rồi mới được kết luận — đúng quy trình positive + negative control.
+
+### 46.4 Avatar cho bản ghi hiện có
+
+10 ảnh tự tạo (8 người + 2 huy hiệu tổ chức), resize 256×256 JPEG bằng System.Drawing, commit trong
+`uploads/seed/` (thư mục duy nhất không bị gitignore) để `GET /uploads/seed/avatar-01.jpg` phục vụ y hệt
+một ảnh user upload. `npm run db:avatars` (`src/db/seed-avatars.ts`) **từ chối chạy khi API còn sống**
+(PGlite một người ghi) và chỉ đụng các dòng `avatar_url IS NULL` hoặc đang trỏ vào chính ảnh seed — ảnh
+Google và ảnh user upload không bao giờ bị ghi đè. Lần chạy đầu gán theo thứ tự tạo nên hồ sơ nam nhận
+ảnh nữ; đã đổi sang hai pool theo giới và chạy lại: `MALE=3, FEMALE=2, OTHER=5`, đối chứng qua
+`GET /admin/users` (Trần Quốc Bảo → avatar-06, Phạm Gia Huy → avatar-04, Võ Thanh Tùng → avatar-02,
+Đặng Khánh Linh → avatar-03, Lê Thu Hà → avatar-01; tài khoản Google vẫn giữ ảnh của họ).
+
+### 46.5 Admin
+
+`CharitiesPage` thêm nút "Chọn ảnh" trong dialog: file input ẩn → `POST /uploads` → ghi đường dẫn trả
+về vào **trường nháp** + thông báo "Đã tải ảnh lên. Bấm Lưu để áp dụng." (đúng luật plain-language:
+không tự lưu, một nút Lưu duy nhất). Validator riêng thay `rules={[{type:'url'}]}` vì rule đó từ chối
+`/uploads/…`. Bảng Users/Charities render qua `resolveAssetUrl`. Đã bấm thật trong dialog: field nhận
+`/uploads/2026-11/3ecd3cfe-….png`, toast hiện, "Đồng ý" → `PATCH` 200 → đọc lại `avatarUrl` đúng đường
+dẫn đó; sau khi xác nhận em đã đặt lại về `charity-01.jpg` để dữ liệu demo không mang ảnh thử.
+
+### 46.6 Cổng kiểm chứng (chạy sau cùng, tất cả xanh)
+
+| Repo | Kết quả |
+| --- | --- |
+| BE | `lint` 0 lỗi · `tsc --noEmit` 0 · unit 5 suites / 60 · e2e **11 suites / 92** (gồm `uploads.e2e-spec.ts` 9 ca: 401 ẩn danh, ghi và đọc lại nguyên byte kèm header CORP, JPEG hợp lệ, PNG giả mạo 422, MIME rác 422, quá cỡ 422, thiếu part 400, nhận URL tương đối, control data-URI vẫn 400) |
+| FE | `expo lint` 0 warning · `tsc --noEmit` 0 · jest **12 suites / 95** |
+| Admin | `tsc -b` 0 · oxlint 0 · vitest **3 files / 36** · `vite build` OK; grep chunk `CharitiesPage-*.js` thấy lệnh `post` tới `/uploads` với `multipart/form-data` và nhãn tiếng Việt (negative control: `base64` chỉ xuất hiện trong vendor, không phải code em viết) |
+| Artifact sống | `POST /uploads` 201 → `GET /uploads/2026-11/….png` 200 `image/png` → `PATCH /users/me` 200 → `/users/me` trả đúng đường dẫn tương đối; avatar seed `200 image/jpeg 14587` |
+
+### 46.7 Việc còn để ngỏ (chưa làm, ghi lại)
+
+- Đổi sang bên thứ ba: chỉ cần thêm driver `ImageStorage` mới; nhưng phải quyết định **di dời** các file
+  đã nằm trong `uploads/` hay để nguyên (URL cũ vẫn phải sống).
+- Chưa xoá file: user xoá ảnh (`DELETE /users/me/images/:id`) chỉ xoá dòng DB, byte vẫn trên đĩa; lên S3
+  thì phải tính lifecycle. Ảnh upload thử trong `uploads/2026-11/` hiện là file mồ côi của dev DB.
+- `POST /uploads` chưa có rate limit riêng (throttler toàn cục 120 req/60 s vẫn áp), và chưa chặn dung
+  lượng theo từng user.
+- Ảnh chưa được resize/cắt phía server — app gửi ảnh đã cắt 1:1 từ picker, nhưng admin upload nguyên
+  file; driver thật nên kèm pipeline thumbnail.
+
+
+---
+
+## 47. Redesign toàn diện theo brand contract — phương pháp OpenDesign
+
+**Nguồn phương pháp.** [OpenDesign](https://github.com/nexu-io/open-design) tổ chức mỗi design system
+thành một package: `DESIGN.md` (brand contract) + tokens + components, và agent **refactor component
+thật của repo theo contract** chứ không dán template đè lên sản phẩm. Em áp dụng đúng vòng đó: viết
+[DESIGN.md](../DESIGN.md) ở gốc repo làm nguồn sự thật chung cho app và admin, rồi sửa token → component
+→ màn hình, và kiểm chứng bằng render thật.
+
+### 47.1 App di động
+
+- **Thang chữ một nguồn.** `theme/typography.ts` đổi sang thang 11/12/14/15/16/18/20/24/30 (line đi
+  kèm, tracking âm ở cỡ lớn). Script migrate **233 chỗ `fontSize`/`lineHeight` số trần trong 59 file**
+  (`src/app` + `src/components`) về `type.*`; backup trước khi chạy, ba import bị thừa dấu phẩy được
+  sửa tay và bắt lại bằng `tsc`. Sau cùng grep `fontSize: [0-9]` = **0**. Weight giữ nguyên ý đồ màn
+  hình (chỉ size/line về token), nên không màn nào mất nhấn nhá.
+- **Bề mặt xếp lớp.** `shadow.card` hạ xuống phẩy nhẹ (ios 0.04/12/4, android elevation 1); thẻ phân
+  cấp bằng viền mảnh chứ không bằng bóng đậm. Component mới `Surface` (nền + viền + bo + padding theo
+  contract) và `PlayerRowCard` chuyển sang dùng nó; 9 thẻ vẽ tay còn thiếu viền được thêm hairline.
+- **Chrome.** `AppBar` bỏ viền đáy và nằm trên màu canvas (-screen liền mạch thay vì dải trắng cắt
+  ngang); tab bar tăng vùng icon active lên 48×30 và đổi màu inactive sang `textMuted` cho dễ đọc.
+- **Trạng thái rỗng có lối ra.** `EmptyState` nhận `actionLabel`/`onAction`; Trang chủ và Lịch sử dùng
+  nó với nút "Tìm người chơi" thay vì câu chết "Không có dữ liệu".
+- **Ngoại lệ có chủ đích.** Nhãn tab bar giữ bậc 11 px: năm tab ở 375 dp chỉ còn ~70 dp mỗi ô, bậc 12
+  cắt cụt "Quyên góp"/"Thông báo" (đã thấy trên ảnh chụp). Ghi chú ngay trong `(tabs)/_layout.tsx`.
+
+### 47.2 Console quản trị
+
+Một agent riêng triển khai, em kiểm chứng lại bằng render và cổng:
+
+- `ConfigProvider` mang đủ token contract: primary/info `#5B51D8`, success/warning/error khớp status
+  app, radius 10, controlHeight 36, canvas `#F6F7FB`, hairline `#E4E6EF`; component tokens cho Menu
+  (nền sáng, active tint violet), Table (header `#F0F1F6`, hover tint), Button (bỏ bóng).
+- Sider **sáng** cùng tông nội dung với brand mark violet + wordmark; header trắng viền mảnh; giữ
+  nguyên tier Tag, Avatar dropdown, cổng 403 và toàn bộ phân quyền.
+- Khung trang thống nhất `PageHeader → FilterCard → TableCard`; **23 bảng** đều có `TableEmpty` tiếng
+  Việt; hết hex cứng trong page (money ± và Progress đi qua token, tag trạng thái đi qua `ToneTag`).
+- Login và Dashboard dựng lại theo contract (thẻ hairline, KPI có icon trong vòng tint); nghiệp vụ,
+  query và mutation giữ nguyên.
+
+### 47.3 Ba defect chỉ lộ ra khi chụp màn hình thật
+
+1. **Nhãn tab tràn ở 375 dp** sau khi thang chữ nâng caption lên 12 — hạ về 11 như ngoại lệ ở 47.1.
+2. **Cột "Người dùng" của bảng Tài khoản co còn ~144 px** khiến tên và email gãy từng chữ một
+   (`Mạnh / Nguyễn / manhn / guyer…`). Sửa: `width: 260` cho cột nhận diện + `ellipsis` hai dòng
+   ([UsersPage.tsx](../play-together-admin/src/pages/UsersPage.tsx)); chụp lại thấy mỗi người một dòng
+   tên, một dòng email.
+3. **Avatar đỏ rượu vang trên rail người chơi** không phải lỗi render: là file PNG **1×1 pixel**
+   (alpha 127) còn sót từ phép thử upload, được lưu làm avatar của `demo.player1`. Đã thay bằng ảnh
+   seed đúng giới qua chính `PATCH /users/me` của tài khoản đó — không sửa thẳng vào DB.
+
+### 47.4 Kiểm chứng
+
+Panel Browser của phiên đang ẩn nên không chụp bằng MCP được; em dựng **Chrome headless + CDP**
+(node có WebSocket sẵn) để chụp pixel thật: app ở 375×812 và 768×1024, cả sáng lẫn tối
+(`prefers-color-scheme`), admin ở 1280×860 cho dashboard, bảng Tài khoản, login và cả cổng 403 (seed
+nhầm tier Tài Chính ở lần chụp đầu — tình cờ thành phép thử trạng thái ngoài quyền). Tiến trình
+chrome chụp hình đã dọn sạch sau cùng.
+
+Cổng: FE `tsc` 0 lỗi, `expo lint` 0 warning, jest **12 suites / 95**; admin `tsc -b` 0, oxlint 0,
+vitest **36**, `vite build` xanh; grep chunk admin thấy `5B51D8`/`itemSelectedBg:#EFECFF` và không còn
+`1677ff` trong các chunk page (negative control chỉ còn trong vendor AntD).
+
+### 47.5 Còn để ngỏ
+
+- Admin chưa có dark mode (contract chưa đặt yêu cầu); app vẫn resolve scheme một lần lúc import —
+  đổi theme nóng sẽ phải đụng cả 46 màn, chưa làm.
+- Skeleton mới phủ rail người chơi và gợi ý tìm kiếm; các danh sách khác vẫn `LoadingView`. Đáng lẽ
+  nên quét tiếp một lượt `ListEmptyComponent`/`LoadingView` toàn app.
+- 47 màn vẫn giữ `StyleSheet.create` riêng; bước tiếp theo của contract là gom các khối thẻ lặp lại
+  về `Surface` dần dần, không phải một lần đập đi.
+
+## 48. Admin dark mode — đóng mục để ngỏ 47.5
+
+**Yêu cầu**: "làm thêm dark mode cho admin nha".
+
+**Cách làm** (theo contract §5 `DESIGN.md`, giữ nguyên stack AntD v6):
+
+- Tách theme khỏi `src/main.tsx` về `src/theme.ts`: hai bản `light` / `dark` đặt cạnh nhau nên mọi
+  khác biệt đều đọc được trong một file. Bản light **không đổi một giá trị nào** so với block cũ.
+- `src/app/Root.tsx` là component duy nhất đọc chế độ và đưa `theme` vào `ConfigProvider` (tách file
+  để `oxlint` fast-refresh còn 0 warning; `main.tsx` chỉ còn bootstrap + render).
+- `src/lib/themeMode.ts`: store zustand `mode: 'light' | 'dark' | 'system'` + `systemDark`, key
+  `pt_admin_theme`, mặc định `system`; `resolveTheme()` là hàm thuần nên test được không cần DOM;
+  listener `matchMedia` giúp đổi theo hệ điều hành ngay khi OS chuyển theme.
+- Bản tối dùng `theme.darkAlgorithm` và nên khớp bảng dark của app: canvas `#101219`, container
+  `#181B24`, bề mặt nổi `#20242F`, hairline `#2A2E3B`, viền ô nhập `#454C60`, `colorTextBase`
+  `#F1F2F8`; màu hành động nâng lên violet 600 `#6E64F0` (thuật toán dark render ra xấp xỉ
+  `#6158CF`), menu active `#2C2E52`/`#BCB3FF`, header bảng `#20242F`. Không đổi seed status vì
+  darkAlgorithm tự sinh bảng màu tối từ cùng một seed, nên `StatusTag` dùng chung nhãn cho cả hai.
+- Công tắc ở header (`AdminLayout`): Dropdown ba lựa chọn **Sáng / Tối / Theo hệ thống**, icon mặt
+  trời / mặt trăng theo chế độ đang hiển thị; không có lựa chọn bị khoá.
+- `src/index.css`: `color-scheme` đổi theo `data-theme`, `body` lấy nền `var(--pt-canvas)`.
+  `data-theme` và biến canvas được đặt ở module scope **trước khi React mount**, nên tải lại ở chế độ
+  tối không loá trắng một frame.
+
+**Kiểm chứng bằng render thật** (Chrome headless + CDP, 1280×860, 12 assertion PASS):
+
+- Dashboard sáng: body `rgb(246, 247, 251)`, ảnh `admin-light-dashboard-v2.png` trùng bản trước khi
+  làm dark → không hồi quy, chỉ thêm icon mặt trời ở header.
+- Bấm công tắc → `Tối`: `data-theme=dark`, `localStorage pt_admin_theme='dark'`, body
+  `rgb(16, 18, 25)` (`admin-dark-dashboard.png`).
+- Tải lại vẫn dark (persist hoạt động).
+- Bảng Tài khoản tối: header bảng `rgb(32, 36, 47)`, avatar và tag tiền đều đọc được
+  (`admin-dark-users.png`).
+- 'Theo hệ thống': OS dark → dark; OS light → **light ngay không cần tải lại** (đường matchMedia live).
+- Login tối (`admin-dark-login.png`): nút `Đăng nhập` `rgb(97, 88, 207)` — đúng giá trị darkAlgorithm
+  sinh ra từ seed `#6E64F0`, chữ trắng đạt tương phản.
+- Surface nổi trong tối: modal `Sửa` (`admin-dark-modal.png`) và dropdown Select
+  (`admin-dark-select.png`) đều `rgb(32, 36, 47)` với chữ `rgba(241, 242, 248, .85)` — không rò
+  panel trắng, không phải kiểu "nền tối mà popup trắng".
+- Hai ghi chú về AntD v6 trong quá trình chụp: content modal là `.ant-modal-container` (không còn
+  `.ant-modal-content`), và dropdown Select chỉ mở khi gửi `Input.dispatchMouseEvent` thật chứ
+  `element.click()` không mở được — hai lần probe đầu fail vì selector/cách giả lập sự kiện, không
+  phải lỗi giao diện.
+
+**Vá dữ liệu phát hiện khi chụp**: `demo.hirer1` vẫn mang avatar là ảnh test upload một màu
+400×400 (`uploads/2026-11/50458f27-….png`), hiện thành vòng magenta trong bảng. Sửa qua chính
+`PATCH /users/me` của tài khoản đó (admin DTO không có quyền đổi avatar), sang
+`/uploads/seed/avatar-04.jpg`, trả về 200 — cùng loại defect với `demo.player1` ở 47.3.
+
+**Cổng**: admin `tsc -b` 0 lỗi, oxlint **0 warning** (54 files), vitest **40 passed** (thêm 4 test
+`themeMode`: system theo OS, lựa chọn tường minh thắng, mặc định `system`, `setMode` ghi
+localStorage), `vite build` xanh. Grep chunk build: `6E64F0`, `101219`, `pt_admin_theme` đều có mặt;
+`1677ff` không còn trong `src/` (chỉ xuất hiện trong hằng số default của thư viện AntD ở vendor
+chunk, tức negative control nằm ngoài code ta).
+
+**Còn để ngỏ**: app di động vẫn resolve scheme một lần lúc import (đổi theme nóng chưa làm); admin
+chưa có accent khác ngoài violet.
+## 49. Dashboard admin — bố cục lại toàn bộ (R6)
+
+**Yêu cầu**: "Sắp xếp refactor và improve lại UI của Dashboard cho thật đẹp và xịn xò hơn".
+
+**Trước**: bốn `Card` + `Statistic` trần, một bảng trạng thái hai cột, card "Chi trả đang chờ" gần như
+trống trắng, và một cột nút block cho hàng chờ; không có biểu đồ, không có ngữ cảnh kỳ ngoài một
+Radio.Group nhỏ.
+
+**Sau** (giữ stack AntD v6, không thêm thư viện chart):
+
+- **Hero band** gradient violet → indigo với glow gold/magenta và lớp grain SVG: overline, tiêu đề,
+  chấm live đập theo nhịp làm mới, giờ cập nhật thật; `Segmented` chọn kỳ dời lên hero và **mặc định
+  7 ngày** để lần mở đầu tiên đã có dữ liệu thật (kỳ "Hôm nay" của DB dev trống trơn).
+- **Bốn KPI surface** thay Card trần: icon tint theo hue riêng của từng chỉ số, số đếm động
+  (`AnimatedNumber`, tôn trọng `prefers-reduced-motion`), sparkline đơn tạo mới thật, thanh cơ cấu
+  người chơi / từ thiện / quản trị, meter cửa chờ giải ngân, và trạng thái "Hàng chờ sạch" khi không
+  còn việc tồn.
+- **Chart diễn biến** SVG tự vẽ (`TrendChart`): hai series thật — tạo mới theo `createdAt`, hoàn thành
+  theo `endedAt` — vùng gradient, lưới bốn vạch tròn số, crosshair + tooltip khi hover. Dữ liệu bucket
+  từ `/admin/orders` (`from` + `sort=createdAt`, tối đa 10 trang; tràn thì ghi chú rõ số đơn bị cắt).
+  Đối chiếu API khớp tuyệt đối: 14 đơn trong kỳ = 3/3/2/6/0/0/0 theo ngày.
+- **Donut cơ cấu** bảy hue tách nhau bằng cả luminance (`src/lib/chartHues.ts`), hover từng cung đổi
+  số ở tâm; legend bên cạnh là link lọc thật `/orders?status=…`.
+- **Trong kỳ** thành bốn tile có meter tỷ lệ kết thúc sớm / phí nền tảng / tỷ lệ hoàn và năm sao đánh
+  giá; **hàng chờ** thành hàng link có badge số, tint vàng khi còn việc; cột trái xếp `Trong kỳ` +
+  `Đơn mới nhất`, cột phải `Việc cần làm ngay` + `Hoạt động quản trị` (audit, chỉ SUPER_ADMIN) hoặc
+  `Chi trả đang chờ` khi không có quyền audit. RBAC giữ nguyên: chart và đơn mới nhất chỉ hiện khi
+  tier được mở `/orders`.
+- Component mới: `src/components/charts.tsx` (Sparkline / TrendChart / Donut),
+  `src/components/AnimatedNumber.tsx`, `src/lib/dashboardSeries.ts` (bucket giờ cho hôm nay, ngày cho
+  kỳ dài + `niceCeiling`) kèm 5 test, `src/lib/chartHues.ts`. `WithdrawalsPage` nhận `?tab=charity`
+  để hàng chờ từ thiện deep-link đúng tab.
+- `src/index.css` thêm họ class `pt-*`: hero, KPI, meter, share bar, hàng chờ, hàng đơn, tile, tooltip
+  chart, skeleton shimmer, entrance stagger; **scrollbar vẽ theo palette** cho cả hai chế độ; media
+  ≤575px và `prefers-reduced-motion`.
+
+**Ba defect chỉ lộ khi render và đã sửa**: (1) mặc định "Hôm nay" khiến chart và các tile kỳ trống
+ngay lần mở đầu → đổi mặc định sang 7 ngày; (2) khoảng trắng lớn giữa hàng "Trong kỳ" và hàng "Đơn
+mới nhất" → ghép thành hai cột xếp chồng; (3) mobile 390px: hero cắt mất nút làm mới, tên đơn xếp dọc
+từng chữ, legend đè tiêu đề chart → hero wrap + segmented thu gọn, hàng đơn xếp hai tầng với
+ellipsis, ẩn legend và tag thừa ở khổ hẹp.
+
+**Kiểm chứng**: Chrome headless + CDP, 15 assertion PASS — hero, 4 KPI, chart SVG, 7 hàng chờ, 6 đơn
+mới nhất, feed audit, tooltip hover, đổi kỳ 30 ngày sinh nhãn ngày, deep link hàng chờ ra
+`/orders?status=DISPUTED`, dark mode, mobile không tràn ngang (0px), không console error. Ảnh:
+`dash-light-1440.png`, `dash-light-30d.png`, `dash-dark-1440.png`, `dash-dark-390.png`. Cổng: `tsc -b`
+0, oxlint 0 warning, vitest **45**, `vite build` xanh; grep artifact thấy `pt-hero` trong chunk CSS và
+`dashboard-series` + `3FB97F` trong chunk `DashboardPage`.
+
+**Còn để ngỏ**: chưa có nút xuất CSV/Ảnh của chart; cung donut chưa bấm được trực tiếp (legend thì có).
+
+## 50. Sửa chớp trắng của bộ chọn kỳ ở hero (light mode)
+
+**Triệu chứng**: bấm đổi kỳ trên hero, light mode chữ trong Segmented biến thành trắng suốt lúc
+thumb trượt; dark mode bình thường.
+
+**Nguyên nhân đo được bằng CDP ở frame giữa chuyển động**: khi motion chạy, AntD gỡ
+`ant-segmented-item-selected` khỏi item rời đi và chỉ gắn `ant-segmented-item-selected-text` cho item
+đích; màu chữ item rời đi được interpolate về màu unselected (`rgba(255,255,255,.85)`) trong khi thumb
+nền trắng (`colorBgElevated` của light) vẫn trượt đè lên đúng chữ đó → trắng trên trắng. Dark không lộ
+vì thumb nền `#20242F`, chữ trắng vẫn đọc được.
+
+**Sửa** (`src/index.css`, đúng hướng "đổi màu chữ ở white mode"): light mode cho **mọi nhãn** màu tím
+đậm `#2F2A72` trên track kính mờ `rgba(255,255,255,.42)` — nhãn rời đi vẫn đậm nên đọc được cả trên
+thumb trắng lẫn trên track; pill selected giữ nền trắng + chữ tím đậm, hover thêm nền trắng `.35`.
+Tương phản nhãn chưa chọn trên track ≈ 5.5:1. Dark giữ nguyên luật cũ; hai bộ luật tách scope bằng
+`:root[data-theme='dark']` và `:root:not([data-theme='dark'])` để không đè nhau.
+
+**Kiểm chứng**: frame giữa (90ms) light mode mọi nhãn đo được `rgb(47, 42, 114)`, không còn giá trị
+nhạt trung gian; ảnh `seg-light-mid.png`, `seg-light-settled.png`, `seg-dark-mid.png` cho thấy chữ đọc
+được ở mọi vị trí thumb của cả hai chế độ. Regression toàn dashboard: 15 assertion PASS, mobile 390
+không tràn, 0 console error; oxlint 0 warning, `vite build` xanh.
+
+## 51. Bốn chỉnh sửa dashboard theo phản hồi người dùng
+
+**Phản hồi**: (1) hàng "Tiền đang giữ hộ" trong "Việc cần làm ngay" không giống các hàng còn lại;
+(2) khoảng trống lớn bên dưới "Cơ cấu trạng thái đơn"; (3) thiếu viết hoa đầu câu ở "· tự làm mới mỗi
+phút" và "tổng đơn"; (4) hai cột số của legend donut không có tiêu đề nên không biết cột nào là gì.
+
+**Sửa**:
+
+1. Hàng giữ hộ bỏ dòng phụ dưới nhãn, chuyển số tiền vào **pill bên phải** cùng kiểu badge với các
+   hàng khác (`.pt-queue-money`), chevron luôn nằm cuối hàng — mọi hàng chờ giờ cùng một khuôn:
+   chấm màu → nhãn → pill giá trị → chevron.
+2. Khoảng trống sinh ra vì `TrendChart` chỉ có viewBox nên trên màn rộng (máy người dùng 2559px)
+   chart cao tới ~533px và kéo card donut giãn theo. Nay chart **đo chiều rộng thật bằng
+   ResizeObserver** và giữ chiều cao cố định 240px (`preserveAspectRatio="none"`), nên hai card cùng
+   hàng luôn cao 321px ở mọi khổ màn; donut phóng lên 184px và thân card căn giữa, hết dải trống.
+3. Viết hoa: "Cập nhật lúc … · **Tự** làm mới mỗi phút"; tâm donut "**Tổng** đơn".
+4. Legend donut thành lưới bốn cột có **hàng tiêu đề** "Trạng thái / Số đơn / Tỷ lệ" (chữ nhỏ hoa,
+   gạch chân mảnh), cột số và cột phần trăm căn phải thẳng hàng nhờ `grid-template-columns` cố định.
+
+**Kiểm chứng**: headless ở 2559×1400, 1440×1000 và 390×844, cả sáng lẫn tối: chiều cao chart đúng
+240px ở cả ba khổ, hai card cùng hàng lệch nhau 0px, thân donut không tràn, tiêu đề legend đúng
+"Trạng thái|Số đơn|Tỷ lệ", tâm donut "Tổng đơn", hero chứa "Tự làm mới mỗi phút", hàng giữ hộ có pill
+"320.000 đ" và chevron là phần tử cuối, mobile không tràn ngang, 0 console error. Ảnh
+`fix-light-2559.png`, `fix-dark-2559.png`, `fix-dark-1440.png`, `fix-dark-390.png`. Cổng: `tsc -b` 0,
+oxlint 0 warning, vitest 45, `vite build` xanh.
+
+## 52. Ba chỉnh sửa dashboard: chữ dòng tiền, cột số hàng chờ, bố cục dòng audit
+
+**Phản hồi**: (1) "297.000 đ trong cửa chờ giải ngân" khó hiểu, muốn dùng từ khác; (2) "Việc cần làm
+ngay": cột bên phải phải là **số đơn (record)** cần làm, mục nào dính tiền thì **tổng tiền nằm ngay
+dưới nhãn**; (3) "Hoạt động quản trị": dòng trên ghi account thao tác + update mục gì, dòng dưới là
+chi tiết update cái gì, còn thời gian đẩy sang bên phải hàng.
+
+**Sửa**:
+
+1. **Dòng tiền KPI**: "… trong cửa chờ giải ngân" → "**… đang chờ trả cho người chơi**". Đồng thời bỏ
+   meter nằm trên dòng đó: `pendingCredits` (thu nhập người chơi chưa release) và `escrowHeld` (tiền
+   đơn còn HELD) là **hai pool rời nhau** — đối chiếu `admin-ops.service.ts` thấy escrow chỉ cộng các
+   row `status = HELD` còn credit chỉ cộng row `releasedAt IS NULL` — nên thanh tỷ lệ cũ hàm ý sai
+   quan hệ bộ phận / toàn thể. Card giữ hai dòng chữ thuần, chân card vẫn dóng hàng với ba card kia.
+2. **Hàng chờ**: mọi hàng cùng một khuôn chấm màu → nhãn (+ tổng tiền dưới nhãn, tiền tố "Tổng") →
+   **pill số record** → chevron. Hàng "Tiền đang giữ hộ" hết pill tiền (`.pt-queue-money` bị xoá):
+   số record lấy thật từ `/admin/money/escrows?status=HELD&pageSize=1` qua `meta.total` (query riêng,
+   bật theo quyền `/money`, tự làm mới mỗi phút và ăn nút Làm mới), tổng tiền xuống dòng phụ.
+   Nhãn và dòng phụ ellipsis một dòng (`.pt-queue-label` / `.pt-queue-sub`) để không đẩy pill ra ngoài.
+3. **Feed audit**: hàng thành lưới ba cột `8px | phần thân | thời gian`. Dòng 1 = tên người thao tác
+   (đậm) + nhãn hành động (đã gọi tên mục bị sửa); dòng 2 = **chi tiết thay đổi** dựng bởi
+   `src/lib/auditSummary.ts`: cặp `before/after` đọc thành "Trường: giá trị cũ → giá trị mới", enum đi
+   qua nhãn chung (`STATUS_META`, role, tier), tiền ra `đ`, phí cấu hình ra `%`, giờ/phút ra đơn vị,
+   UUID và id bị giấu, lần lưu không đổi giá trị nào thì kể tên các mục đã sửa ("Đã lưu: …", tối đa
+   bốn mục rồi "…"); hết chỗ thì dùng lý do người thao tác nêu, không có gì thì "Không có chi tiết kèm
+   theo". Thời gian sang cột phải, hover ra giờ tuyệt đối; cả hàng là link tới `/audit?action=…` nên
+   bấm vào là bảng nhật ký lọc sẵn theo hành động đó. Hai dòng thân clamp 2 dòng + tooltip đủ chữ.
+4. **Dọn warning lộ ra khi đi kiểm chứng**: AntD v6 báo `Typography.Text` không nhận `ellipsis.rows`
+   (dòng 1 audit đổi sang `Paragraph`), và `Space direction` đã deprecated → đổi sang `orientation`
+   ở sáu chỗ (AuditLog, Orders, OrderDetail, UserDetail ×3). Console sạch hẳn.
+
+**Kiểm chứng**: Chrome headless + CDP ở 1440×1000 và 390×844, cả sáng lẫn tối — 27 assertion PASS:
+hết chữ "trong cửa chờ giải ngân", có chữ mới, còn đúng 3 meter ở tile kỳ; không còn `.pt-queue-money`,
+mọi pill phải khớp `^[\d.]+$`, pill giữ hộ = `meta.total` của API (2), ba dòng phụ đều "Tổng … đ";
+feed đủ 4 hàng, mỗi hàng 3 cột với `.pt-audit-time` nằm sát mép phải (lệch < 1.5px), thân không tràn
+dưới cột giờ, không UUID/enum trần trong chữ, thời gian không lẫn vào thân; bấm hàng audit mở
+`/audit?action=user.update` và bảng hiện đúng 2 hàng; mobile tràn ngang 0px; 0 console error.
+Ảnh: `r7-light-1440.png`, `r7-dark-1440.png`, `r7-queue-light.png`, `r7-queue-dark.png`,
+`r7-light-390.png`, `r7-dark-390.png`, `r7-audit-filtered.png`. Cổng: `tsc -b` 0, oxlint 0 warning,
+vitest **59** (thêm 14 test `auditSummary`), `vite build` xanh.
+
+**Dữ liệu kiểm chứng**: để feed có cặp before→after thật, đổi trạng thái hiện diện của
+`demo.player2` sang BUSY rồi **trả lại ONLINE ngay** bằng cùng endpoint quản trị (đã đọc lại
+`account.status = ONLINE` sau cùng); không đụng tiền, quyền hay khoá tài khoản. Hai bản ghi audit
+của lần đổi và lần trả là thao tác thật, nằm lại trong nhật ký đúng như thiết kế của audit trail.
+
+## 53. Ô "Dòng tiền" mới, KPI bấm được, đổi chữ "sạch" và nhãn "Đã huỷ" (R8)
+
+**Phản hồi**: (1) design lại ô tiền — tách hay update tuỳ chọn, nhưng tiêu đề chỉ là **"Dòng tiền"**
+(ô cũ để trống một khoảng lớn dưới số sau khi bỏ meter ở §52); (2) bấm mỗi ô KPI phải vào thẳng trang
+của phần đó; (3) đổi chữ "sạch" trong "Hàng chờ sạch…" sang từ cùng nghĩa; (4) nhãn status "Đã đóng"
+đổi thành "Đã huỷ" cho hợp lý.
+
+**Sửa**:
+
+1. **Ô "Dòng tiền"** (`DashboardPage`): headline = **tổng tiền đang nằm trong nền tảng** =
+   `escrowHeld + pendingCredits` (617.000 đ ở DB dev) — hai pool rời nhau nhưng cùng là tiền nền tảng
+   đang giữ hộ người dùng, nên cộng lại thành một tổng đúng nghĩa. Bên dưới là **thanh hai dải**
+   (vàng = giữ hộ, lục = chờ trả) tách đúng tổng đó, mỗi dải có hover title nêu tên pool và số tiền;
+   dòng legend "Giữ hộ 320.000 đ · Chờ trả 297.000 đ"; dòng chữ mờ giữ phí / quyên góp luỹ kế. Hết
+   khoảng trống: chân ô lại đủ hai dòng như ba ô kia, và thanh cơ cấu dóng ngang hàng với thanh của ô
+   "Người dùng" (đo lệch < 2px).
+2. **KPI thành link**: `KpiSurface` nhận `to`; có `to` thì cả ô là `Link` (`.pt-kpi-link`: cursor
+   pointer, hover nhấc 2px + viền tint violet, focus ring cho bàn phím, `aria-label="Mở trang …"`),
+   không có `to` thì là `div` tĩnh không pointer. Đích: `/users`, `/orders`, `/money`, và ô kiểm duyệt
+   mở hàng đầu tiên tier được mở trong `/reports?status=PENDING` → `/ratings?status=FLAGGED` →
+   `/feedback?status=PENDING`. SUPER_ADMIN bấm đủ bốn ô; FINANCE chỉ `/orders` + `/money`; MODERATOR
+   chỉ `/users` + `/orders` + `/reports` — ô không có quyền không giả vờ bấm được.
+3. **Chữ "sạch" → "trống"**: tag hàng chờ "Hàng chờ trống", câu KPI "Hàng chờ trống, không việc tồn".
+   Grep toàn admin không còn chữ "sạch".
+4. **`CLOSED` → "Đã huỷ"** trong `STATUS_META` (donut legend, bảng đơn, filter, StatusTag dùng chung
+   một nhãn nên đổi một chỗ là hết mọi chỗ cũ); `CANCELLED` của rút tiền cũng đọc "Đã huỷ" nhưng nằm
+   domain khác, không dropdown nào trộn hai giá trị. Thêm assertion khoá nhãn trong `labels.spec`.
+   App mobile vốn đã xếp CLOSED vào họ huỷ (`Cancel`/`Reject`/`OverTime` trong mapper) nên admin giờ
+   khớp app.
+
+**Kiểm chứng**: Chrome headless + CDP, 35 assertion PASS ở 1440×1000 và 390×844 cả sáng lẫn tối:
+tiêu đề bốn ô đúng "Người dùng|Đơn thuê|Dòng tiền|Hàng chờ kiểm duyệt", headline tiền = tổng API
+(617.000 đ), thanh hai dải có title, legend đủ hai pool, chân ô hai dòng đơn và thanh dóng hàng;
+bốn href đúng `/users|/orders|/money|/reports?status=PENDING`, cursor pointer, hover đo được
+`matrix(1,0,0,1,0,-2)`, **bấm lần lượt từng ô mở đúng trang đó và trang render thật**; hết chữ "sạch",
+tag "Hàng chờ trống", legend donut "Đã huỷ", không còn "Đã đóng"; mobile tràn ngang 0px, ô tiền không
+cắt chữ; FINANCE/MODERATOR chỉ link những trang có quyền và ô tĩnh không pointer; 0 console error.
+Ảnh: `r8-light-1440.png`, `r8-dark-1440.png`, `r8-kpis-light.png`, `r8-money-light.png`,
+`r8-money-dark.png`, `r8-light-390.png`, `r8-dark-390.png`, `r8-finance.png`, `r8-moderator.png`.
+Cổng: `tsc -b` 0, oxlint 0 warning, vitest **59**, `vite build` xanh; grep chunk thấy `Dòng tiền`,
+`pt-kpi-link`, `Hàng chờ trống`, `Đã huỷ` và vắng `Dòng tiền · đang giữ hộ`, `Hàng chờ sạch`, `Đã đóng`.
+## 54. Refactor chrome + mọi màn còn lại theo chuẩn Dashboard (R9)
+
+**Phản hồi**: dashboard refactor quá đẹp, yêu cầu làm tương tự cho **tất cả màn còn lại**, gồm cả
+header, footer, phần profile, phần chỉnh độ sáng và thanh điều hướng bên trái.
+
+**Sửa**:
+
+1. **Một nguồn cho vị trí màn** — `src/lib/sections.ts` khai `SECTION_META` (14 route → nhóm + tên) và
+   `NAV_GROUPS` (Vận hành / Kiểm duyệt / Quản trị). Sider, overline `PageHeader` và breadcrumb header
+   cùng đọc từ bảng đó; trước đây ba nơi tự viết chữ riêng nên thêm một trang là phải sửa ba chỗ.
+2. **Sider** (`AdminLayout`): brand mark + tên app, nhóm điều hướng để chữ overline, mỗi mục có ô icon
+   tint (`.pt-nav-icon`), mục đang chọn = nền tint + **thanh violet 3px sát mép trái** thay cho gạch
+   dưới mặc định. Chân sider là chip trạng thái API thật (query `['ops','health']` gọi
+   `/api/v2/health`, polling 60s, `retry: 1`) — "API đang hoạt động" / "Đang nối API…" / "Mất kết nối
+   API" — cạnh nút thu. `width 232` / `collapsedWidth 68`, bỏ trigger gầm của AntD.
+3. **Header** dính 60px + blur: trái là breadcrumb "Nhóm › Tên màn"; phải là **bộ chọn độ sáng** giờ là
+   một Segmented ba icon (sáng / tối / theo hệ thống) có tooltip, vạch chia, rồi khối profile. Bấm
+   profile mở thẻ: avatar tint, tên, email, **vai trò đọc bằng tiếng Việt** (không còn SUPER_ADMIN trần),
+   rồi "Nhật ký thao tác" (chỉ khi tier được mở) và đăng xuất.
+4. **Footer** mới: brand mark + "Play Together · Bảng điều hành", chip trạng thái API, bản quyền.
+5. **Lớp design dùng chung** trong `index.css`: 14 biến `--pt-*` khai hai lần (sáng/tối) cho mặt nền,
+   surface, hairline, thead, hover, overline, ba mức chữ, accent, tint, track Segmented, nền popover.
+   Từ đó sinh ra chrome (`.pt-sider/.pt-brand/.pt-nav/.pt-sider-foot/.pt-header/.pt-crumb/.pt-theme-seg/
+   .pt-profile/.pt-content/.pt-footer`), khung trang (`.pt-page-head`, `.pt-toolbar`, `.pt-table-card`
+   with thead in hoa 11px + ô 12px), pill trạng thái (`.pt-status[data-tone]` 9 tone × 2 bản, thay hết
+   `Tag` màu mặc định), trạng thái rỗng (`.pt-empty` icon + câu tiếng Việt) và dải nhận dạng
+   (`.pt-identity`). `FilterCard`/`TableCard`/`TableEmpty`/`StatusTag`/`PageHeader` chỉ còn là lớp mỏng
+   bọc các class đó, nên 17 màn đổi theo mà không sửa từng màn.
+6. **Màn chi tiết** (`UserDetailPage`, `OrderDetailPage`): mở đầu bằng dải nhận dạng (avatar, tên, hai
+   pill trạng thái, ba số liệu tóm tắt) và **bỏ những dòng `Descriptions` lặp lại đúng số liệu đó**;
+   sáu bảng phụ trong màn chi tiết chuyển sang `scroll={{ x: 'max-content' }}`.
+7. **Đăng nhập** (`LoginPage`): trước đây là một thẻ cô độc giữa nền trống; nay là bố cục hai cột —
+   trái brand panel (gradient + grain + overline + tiêu đề + ba điểm bán thật), phải thẻ đăng nhập;
+   hẹp hơn 991px bỏ brand panel. Dòng chân "Mật khẩu sẽ được đặt lại qua email" là câu tự bịa nên thay
+   bằng "Mọi thao tác sau đăng nhập đều được ghi vào nhật ký vận hành." — điều hệ thống thật làm được.
+8. **Dọn API cũ của AntD v6** lộ ra khi đi hết màn: `Space direction` → `orientation` (hết chỗ nào dùng
+   từ cũ), `Drawer width` → `size`, `Timeline items.children` → `items.content`, `Dropdown dropdownRender`
+   → `popupRender`. Console warning biến mất hoàn toàn trong tour.
+9. **Năm defect còn lại sau khi tour đã xanh, bắt được bằng cách soi ảnh kết quả**:
+   (a) cột Game ở `/orders` không có `width`, `scroll={{ x: 1500 }}` chia nốt 80px còn lại nên tag
+   "Age of Empires" vẽ đè chữ cột "Lịch hẹn" — cột Game nay `width: 220`, `x` nâng lên 1720, và
+   `.pt-tag-row`/`.pt-tag-fit` quy định **cuộn dòng trước, chỉ ellipsis khi một giá trị đã rộng hơn
+   cột**; (b) sider thu còn 68px thì tên nhóm bị cắt thành "V…", "K…", "Q…" đọc như lỗi — ở chế độ thu
+   title về `font-size: 0` và thay bằng hairline; (c) `/users/:id` là key RBAC riêng nhưng không có trong
+   `SECTION_META`, nên overline và breadcrumb rơi về nhãn dự phòng và màn "Hồ sơ tài khoản" tự giới
+   thiệu là **"Bảng điều hành › Tổng quan"** — thêm chính key đó vào bảng với nhãn "Hồ sơ tài khoản";
+   (d) sider cũng dùng đúng key đó nên **không mục nào được sáng** khi đang xem hồ sơ — giờ hồ sơ khớp
+   về mục "Tài khoản", và tier đọc được hồ sơ mà không có mục đó trong menu (FINANCE) thì **không sáng
+   gì cả** thay vì sáng nhầm vào "Tổng quan"; (e) bảng phụ trong hai màn chi tiết vẫn mang header mặc
+   định của AntD trong khi mọi bảng danh sách đã dùng chữ in hoa 11px — quy tắc thead/tbody giờ áp cho
+   mọi bảng trong `.pt-content`, một ngôn ngữ bảng toàn console.
+10. **Khoá bằng test** (`permissions.spec`): mọi đường dẫn thật của router phải phân giải ra một
+    `SECTION_META` có cả nhóm lẫn nhãn, và danh sách key trong `NAV_GROUPS` đúng bằng tập key có mục
+    menu. Control âm: xoá dòng `'/users/:id'` khỏi bảng là hai test đỏ ngay.
+
+**Kiểm chứng**: tour Chrome headless + CDP qua **17 URL** — quét sáng 1440, quét tối 1440 và quét
+khổ 375 — **84 assertion PASS / 0 FAIL**: mọi route render, bấm sider điều hướng đúng trang, thu/mở
+232↔68, Segmented đổi sáng↔tối thật, thẻ profile đủ tên–email–vai trò, dòng audit mở được, phân trang
+và tab chạy, modal sửa cấu hình mở/đóng được, dải nhận dạng hai màn chi tiết hiện, **tràn ngang 0px ở
+42 phép đo**, 0 console error. Hai lượt đo riêng cho phần vừa sửa: 12 assertion cho breadcrumb + overline
++ thead hai màn chi tiết (sáng, tối, 375) và 6 assertion cho màu sáng của sider — SUPER_ADMIN vào hồ sơ
+thấy "Tài khoản" sáng, vào đơn thấy "Đơn thuê" sáng, FINANCE vào hồ sơ **không sáng mục nào** nhưng hồ
+sơ vẫn render đủ. Scan riêng `.ant-table-cell` trên 32 màn (1440 và 390) bắt mọi ô có con em vẽ ra ngoài
+cột: sạch, và control dương chứng minh scanner bắt được overflow cố tình 227px. Ảnh: `r9-login-light`,
+`r9-chrome-light`, `r9-chrome-dark`, `r9-profile`, `r9-orders-light`, `r9-orders-dark`, `r9-money-light`,
+`r9-config-modal`, `r9-order-detail`, `r9-user-detail`, `r9-users-light`, `r9-maintenance`, `r9-broadcast`,
+`r9-mobile-dark`, `r9-mobile-orders-light`, `r9-mobile-login`, `r9b-orders-*`, `r9c-rail-collapsed`,
+`r9c-mobile-*`, `r9d-user-detail*`, `r9d-order-detail`.
+Cổng: `tsc -b` 0, oxlint 0 warning / 62 file, vitest **61**, `vite build` xanh; grep chunk dist thấy
+`pt-crumb`, `pt-sider-foot`, `pt-identity`, `pt-login-art`, `pt-tag-row`, `pt-content .ant-table-thead`,
+`Hồ sơ tài khoản`, `ant-menu-inline-collapsed .ant-menu-item-group-title` và vắng `Hàng chờ sạch`,
+`pt-queue-money`, `direction:"vertical"`, `items.children`; `dropdownRender` chỉ còn trong code nội bộ
+AntD, không còn trong `src/`.
+
+## 55. Chân sider bị bỏ, nút thu/giãn lên header (R10)
+
+**Phản hồi**: hai chỗ ở thanh điều hướng vẫn chưa đẹp — chip "API đang hoạt động" nằm ở **cuối** sider
+và nút thu/giãn nằm **dưới đáy**, phải tìm mới thấy; yêu cầu bỏ status ở cuối và đưa nút expand lên
+trên cùng để nhìn thấy.
+
+**Sửa**:
+
+1. **Xoá chân sider** (`AdminLayout`): khối `.pt-sider-foot` (chip trạng thái + nút thu, có `border-top`)
+   biến mất cùng hai class `.pt-sider-foot` / `.pt-sider-health` trong CSS. Lý do không chỉ là thẩm mỹ:
+   một cột điều hướng kết thúc bằng hai phần tử rời nhau, không liên quan gì tới danh sách bên trên,
+   đọc như khối chưa làm xong. Trạng thái nền tảng vẫn còn đó nhưng chỉ ở **footer**, nơi nó thuộc về.
+   Sider giờ kết thúc ngay sau mục cuối và phần còn lại là nền trống — đúng vai của một cột menu.
+2. **Nút thu/giãn sang header**, phần tử đầu tiên của `.pt-header-left` ngay trước breadcrumb, nên nó
+   ở trên cùng và nhìn thấy được trong cả hai trạng thái (232px và 68px). `aria-label` vẫn đổi theo
+   ("Thu gọn thanh điều hướng" / "Mở rộng thanh điều hướng"), hover có nền tint violet như các nút
+   icon khác trong header.
+
+**Kiểm chứng**: tour cũ chạy lại — **86 assertion PASS / 0 FAIL** sau khi thay ba assertion mới thay
+cho assertion "sider health" đã hết nghĩa: footer vẫn đọc "API đang hoạt động", `.pt-sider-foot` và
+`.pt-sider-health` không còn trong DOM, `.pt-header .pt-collapse-btn` có thật. Probe riêng 12 assertion
+đo hình học: nút nằm ở top 15px, cạnh trái breadcrumb 40px ở cả hai trạng thái (expanded left 256 /
+crumb 296, collapsed left 92 / crumb 132, ô 30×30), bấm từ header vẫn thu 232→68 và giãn lại, mobile
+375px nút vẫn hiển thị, sáng/tối không tràn ngang, 0 console error.
+Ảnh: `r10-top-expanded`, `r10-sider-expanded`, `r10-sider-collapsed`, `r10-dark-top`, `r10-mobile-top`.
+Cổng: `tsc -b` 0, oxlint 0 warning / 62 file, vitest **61**, `vite build` xanh; grep chunk dist có
+`pt-header-left` và **vắng** `pt-sider-foot` / `pt-sider-health`.
+
+## 56. Ô icon trong thanh điều hướng bị lệch so với nền tint (R11)
+
+**Phản hồi**: "icon chỗ này với màu đằng sau đang bị lệch, không cân đối" — ảnh chụp khoanh cả cột icon
+của sider.
+
+**Đo trước khi sửa** (`getBoundingClientRect` của tile / `.anticon` / `svg`, 14 mục): tile 26×26 nhưng
+glyph 14×14 nằm **sát mép trái** — `dLeft 0 / dRight 12`, tâm lệch ngang **6px**; chiều dọc thì đúng
+(6/6). Nguyên nhân không phải `margin`: AntD áp `display: flex` lên slot icon nên `place-items: center`
+của `.pt-nav-icon` **không có tác dụng**, icon bị đẩy về đầu dòng theo `justify-content: flex-start`.
+
+**Sửa** ([index.css](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/index.css)):
+
+1. Khai lại cách căn giữa bằng cặp tính chất mà flex cũng hiểu — `.pt-nav.ant-menu .ant-menu-item
+   .pt-nav-icon { align-items: center; justify-content: center; flex: none; }` — và giữ `place-items`
+   cho trường hợp lưới. `flex: none` để ô không bị co khi item là flex container.
+2. **Rail thu 68px lệch theo một nguyên nhân khác**: AntD tính bề rộng item theo glyph 16px, nên item chỉ
+   34–42px và nằm lệch phải trong rail (tâm tile 38 so với tâm rail 34). `.pt-nav.ant-menu-inline-collapsed`
+   bỏ inset của menu, item `width: auto; margin-inline: 8px` đối xứng + `justify-content: center`, vì vậy
+   pill selected vẫn thụt vào đều hai bên như bản mở rộng thay vì tràn sát mép.
+
+**Kiểm chứng**: probe hình học chạy trên **14 mục × 2 trạng thái × 2 bản màu** — mọi tile có
+`|dLeft − dRight| ≤ 0.5` và `|dTop − dBottom| ≤ 0.5` (kết quả trả về mảng rỗng cả bốn lượt), tâm tile
+trùng tâm vùng trong của rail thu (sai lệch < 0.75px). Tour cũ **86 assertion PASS / 0 FAIL**, 0 console
+error. Ảnh: `r11-rail-light`, `r11-rail-dark`, `r11-rail-light-collapsed`, `r11-rail-dark-collapsed`.
+Cổng: `tsc -b` 0, oxlint 0 warning / 62 file, vitest **61**, `vite build` xanh; grep CSS chunk thấy
+`ant-menu-inline-collapsed .ant-menu-item .pt-nav-icon` và `margin-inline:8px`.
+
+## 57. Donut "Cơ cấu trạng thái đơn" thiếu hai trạng thái, và hai nhãn trục ngày chồng nhau (R12)
+
+**Phản hồi**: bộ lọc trạng thái ở `/orders` có bảy lựa chọn nhưng thẻ donut trên dashboard chỉ liệt kê
+năm; người dùng hỏi hai trạng thái còn lại có cần hiển thị không, quyền quyết định thuộc về bên làm.
+
+**Kết luận trước khi sửa**: đây **không phải mất dữ liệu**. `GET /admin/stats` trả `orders.byStatus` dựng
+bằng `GROUP BY`, nên trạng thái không có đơn nào **không xuất hiện thành khoá** — đo trên DB dev kỳ 30
+ngày: `{SCHEDULED:1, LIVE:1, ENDED_EARLY:18, SETTLED:163, CLOSED:2}`, và `PROPOSED` / `DISPUTED` có
+`meta.total = 0` khi lọc thật.
+
+**Quyết định: nên hiển thị**, vì (1) donut là chỗ người vận hành đọc vòng đời đơn, thiếu hai tên khiến
+họ nghi hệ thống ẩn trạng thái; (2) "Chờ đối soát: 0" **là thông tin** — không có đơn kẹt ở khâu quyết
+toán; (3) bảng legend thành danh sách cố định, không nhảy hàng mỗi lần đổi kỳ.
+
+**Sửa** ([DashboardPage.tsx](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/pages/DashboardPage.tsx)):
+
+1. `orderRows` dựng từ **`ORDER_STATUSES`** (đúng enum bộ lọc đang dùng, sinh từ OpenAPI) với
+   `count = byStatus[status] ?? 0`, thay vì `Object.entries(byStatus)`. Legend và dropdown giờ **trùng
+   nhau theo cấu trúc**, không thể lệch nhau vì hai nguồn số.
+2. Dòng 0 đơn mờ hơn (`.pt-legend-zero`, opacity 0.55, số không in đậm) nhưng **vẫn bấm được** và vẫn
+   link `/orders?status=…` — lọc ra bảng rỗng là thao tác hợp lệ, không phải ô điếc.
+3. Donut không vẽ cung 0% (component đã bỏ `value === 0` từ trước) nên hình không đổi; tổng ở giữa vẫn
+   đúng. Điều kiện rỗng đổi từ `orderRows.length === 0` (không còn bao giờ đúng) sang `orderTotal === 0`
+   với câu "Kỳ này chưa có đơn nào ở mọi trạng thái."
+4. **Defect bắt được khi soi ảnh kết quả**: trục ngày của "Diễn biến đơn thuê" in `7/11` sát `8/11` thành
+   một chuỗi không đọc được. Nguyên nhân: nhãn cách đều `ceil(n/8)` theo số thứ tự **và** ép nhãn cuối
+   cùng, nên hai nhãn cách nhau đúng một bước. Sửa thành đếm bước **ngược từ ngày cuối**
+   (`(n-1-i) % labelEvery === 0`) — tám nhãn đều nhau 93,2px và ngày cuối vẫn có nhãn.
+
+**Kiểm chứng**: 17 assertion — legend đủ **7 dòng**, mỗi dòng khớp `byStatus` từng số, đúng hai dòng mờ
+là `Chờ chấp nhận` và `Chờ đối soát` với `0 / 0%`, donut vẫn vẽ **5 cung**, bấm dòng 0 đơn chuyển sang
+`/orders?status=PROPOSED` và bảng hiện "Chưa có đơn thuê nào khớp bộ lọc" chứ không đứng im; khoảng
+nhỏ nhất giữa hai nhãn trục **93,2px** (control âm: luật cũ cho ra `7/118/11`), nhãn cuối đúng ngày hôm
+nay, tổng số nhãn 8. Chạy ở 1440 sáng, 1440 tối và 375px, tràn ngang 0. Tour cũ **86 PASS / 0 FAIL**.
+Ảnh: `r12-donut-light`, `r12-donut-dark`, `r12-donut-mobile`.
+Cổng: `tsc -b` 0, oxlint 0 warning / 62 file, vitest **61**, `vite build` xanh; grep chunk dist thấy
+`pt-legend-zero`.
+
+## 58. Quét a11y/motion do extension Chrome báo: 2 "AI tell" + 17 lỗi chất lượng (R13)
+
+**Phản hồi**: người dùng dùng một extension quét page và dán nguyên danh sách — 2 "AI tells" (easing
+nảy `cubic-bezier` overshoot, dot nhấp nháy vô hạn) và 17 "quality issues" (chữ tương phản thấp, chữ
+10,5px, `transition: width`, chữ trắng trên nền vàng, chữ trắng trên gradient tím, Segmented trong
+hero…). Yêu cầu: sửa **tất cả**.
+
+**Cách làm**: không tin kết quả quét một trang, nên dựng một scanner riêng
+(`scan-a11y.cjs`) đi qua **mọi node chữ** trên **16 route × 2 giao diện + trang login × 2 = 34 trạng
+thái**, tự tính relative luminance theo sRGB, cộng màu alpha lên đúng mặt nền thật rồi so với ngưỡng
+4,5:1 (miễn trừ chữ lớn ≥24px và control bị khoá theo WCAG 1.4.3), đồng thời quét `transition` trên thuộc tính layout,
+`animation-iteration-count: infinite` và mọi `cubic-bezier` có control point ngoài [0,1] trong CSSOM. Con số đi xuống theo từng đợt sửa: **291 → 158 → 52 → 37 → 2 → 0**.
+
+**Sửa — motion**:
+
+1. Hai đường cong nảy trong `theme.ts` (`motionEaseOutBack: …,1.46)` / `motionEaseInBack: …,-0.46)`) đổi
+   sang `cubic-bezier(0.22, 1, 0.36, 1)` và `cubic-bezier(0.64, 0, 0.78, 0)`; scanner đếm **0** đường cong
+   overshoot còn sót trong CSSOM.
+2. Bỏ `@keyframes pt-pulse` và khỏi danh sách `prefers-reduced-motion`: dot trạng thái đứng yên.
+3. Bỏ hẳn animation trên thuộc tính layout do **code mình** viết: thanh rail thu/giãn dùng
+   `transition: none` (kể cả icon/nhãn menu vốn interpolate `margin`), `Meter` chuyển từ
+   `transition: width` sang `transform: scaleX()` — mỗi frame trước đây reflow cả lưới KPI.
+   Scanner hiện báo **0** layout-animation trong dòng chảy. 12 mục còn lại là của AntD và **bị giới hạn
+   trong hộp riêng** (ink bar `position: absolute`, `left` trên `th` không định vị, icon Steps) nên tách
+   sang mục "contained" thay vì gọi là lỗi — có control chứng minh luật mới vẫn bắt được lỗi thật.
+
+**Sửa — cỡ chữ**: `.pt-nav .ant-menu-item-group-title` và `.pt-crumb-group` 10,5px → **11px**; số chữ
+dưới 11px trên toàn bộ 34 trạng thái = **0**.
+
+**Sửa — tương phản** (phần nặng nhất). Phát hiện quyết định: **thuật toán tối của AntD kéo mọi seed màu
+xuống ~0,87 lần** trước khi ra pixel — đo bằng probe: seed `#8882DB` render thành `#7772BD`, seed
+`#9C95FC` render thành `#8882D9`. Vì vậy seed phải đặt = giá trị 4,6:1 chia ngược lại, và kiểm chứng trên
+màu **đã render**, không trên mã nguồn.
+
+| Chỗ | Trước | Sau | Đo lại |
+|---|---|---|---|
+| `colorSuccess` sáng (dấu "+", pill "Hoàn thành", "Hàng chờ trống, không việc tồn") | `#188A54` 4,37 | `#157B4B` | 5,29 |
+| `colorWarning` sáng | `#B4740F` 3,86 | `#95600C` | 5,31 |
+| 5 tone pill sáng (green/gold/blue/orange/volcano) | 3,4–4,5 trên **chính nền tint** | giải lại từng cặp | ≥4,6 |
+| `colorLink` tối | render `#6158CF` 3,12 | seed `#9C95FC` → `#8882D9` | 5,11 |
+| `colorError` tối (nút "Khoá") | render `#A62E34` 2,51 | seed `#F67C82` | 5,11 |
+| `colorSuccess`/`colorWarning` tối | 3,13 / 4,46 | seed `#24B972` / `#DF9012` | 5,19 / 5,11 |
+| Tab đang chọn + số trang hiện tại (tối) | `colorPrimary` 3,12 | `Tabs.itemSelectedColor` / `Pagination.itemActiveColor` = `#A9A2F7` | 6,6 |
+| Chữ trên nút danger đặc (tối) | trắng trên `#D66C71` = 3,36 | `Button.dangerColor` = `#171632` | 5,2 |
+| `.pt-avatar-initial` (chữ cái đầu tên, danh sách "Đơn mới nhất") | tím `#6E64F0` 3,81–4,43 | token `--pt-avatar-fg` theo giao diện (`#5D51EE` / `#A9A2F7`) | 4,66 / 6,0 |
+| 2 `Tag` định sẵn màu trong head card | nền tint của AntD, 2,56–3,39 | đổi sang pill `.pt-status` của thương hiệu | ≥4,6 |
+| Sao đánh giá trung bình | `#F4B740` trên trắng = 1,80 | `--pt-star` (`#B4740F` sáng / `#F4B740` tối) | 3,86 (đồ hoạ, ngưỡng 3) |
+| Overline, `--pt-text-3`, hero + login gradient, Segmented trong hero | 1,9–4,2 | đã siết ở đợt trước của vòng này | ≥4,5 |
+
+**Lỗi bắt được mà extension không thấy**: công tắc "Bật bảo trì để tạm khoá hệ thống" ở `/maintenance`
+vẽ nhãn trắng trên nền `rgba(0,0,0,0.25)` = **1,83:1**. AntD lấy màu nền track từ `colorTextQuaternary`,
+nên override trong phạm vi component: `Switch.colorTextQuaternary = #6F7484` (trắng trên đó 4,66),
+hover `#5A5F73`.
+
+**Có chủ đích không sửa**: nút "Khoá" ở dòng tài khoản của chính người đang đăng nhập bị disable và chỉ
+đạt 1,83:1 — WCAG 1.4.3 miễn trừ control không dùng được, và làm cho nó *sẫm* hơn sẽ khiến nó trông như
+bấm được. Scanner loại trừ `[disabled]`, và test có guard để việc loại trừ đó không làm mờ lỗi thật.
+
+**Control (chứng minh bộ đo còn sống)**:
+- Luật layout-animation: tiêm `.pt-kpi { transition: width }` → scanner bắt 4 phần tử; chuyển đúng các
+  phần tử đó sang `position: absolute` → **0** (đúng tinh thần "chỉ tính khi reflow anh em hàng xóm");
+  gỡ tiêm → 0. 4/4 PASS.
+- Bộ đo tương phản: trên `/users` sáng, số lỗi = 0 dù **có** control bị disable trên màn hình; tiêm
+  `.pt-crumb-group { color: #EFEFEF }` → scanner bắt ngay.
+- Test mới `src/__tests__/designContract.spec.ts` (**28** assertion: 18 tone pill đọc thẳng từ
+  `index.css`, 4 seed tối sau khi nhân hệ số re-shade, 3 mực chữ sáng, 2 đường cong motion). Control âm:
+  làm hỏng `dark/green` + `colorLink` + hai easing → **4 fail**; khôi phục → 28 pass.
+
+**Vướng mắc ghi lại cho lần sau**: `?raw` trong Vitest trả về **chuỗi rỗng** vì Vitest stub CSS mặc định;
+phải bật `test.css: true` trong `vite.config.ts`. Nếu không có assertion `toHaveLength(18)`, test sẽ im
+lặng xanh trên dữ liệu rỗng.
+
+**Kiểm chứng cuối vòng**: scanner `{"contrast":0,"tiny":0,"anim":0,"ease":0}` (12 contained); tour cũ
+**86 PASS / 0 FAIL** (17 URL × 3 khổ, 0 console error); probe màu 12 assertion
+`R13 PROBE GREEN`; cổng `tsc -b` 0, oxlint **0 warning / 63 file**, vitest **89**, `vite build` xanh.
+Ảnh đối chiếu không thoái hoá: `r13-dash-light`, `r13-dash-dark`, `r13-money-dark`, `r13-maint-light`,
+`r13-users-light`.
+
+## 59. Chọn "Hôm nay": chữ trống đè lên trục toạ độ, và một `transition: width` còn sót (R14)
+
+**Phản hồi**: người dùng quét lại bằng extension và báo 2 mục — (1) *text occluded by an overlapping
+element* ở thẻ "Diễn biến đơn thuê", câu "Chưa có đơn thuê nào trong kỳ này" bị che **100%** bởi svg,
+chỉ hiện khi chọn kỳ **Hôm nay**; (2) *layout property animation* cấp trang: `transition: width`.
+
+**Đo trước khi sửa** (`probe-r14.cjs`, kỳ = Hôm nay): `div` câu trống và `svg` biểu đồ **trùng khít
+726×240px**, `overlapPctOfMessage = 100`, và trong svg vẫn vẽ **5 đường lưới + nhãn trục 0 1 2 3 4 +
+8 nhãn giờ**. Nghĩa là extension đúng theo nghĩa sâu hơn nó nói: kỳ không có đơn thì biểu đồ chỉ còn
+một bộ trục vô nghĩa, còn câu chữ in đè lên đó (nền suốt).
+
+**Sửa**:
+
+1. [charts.tsx](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/components/charts.tsx):
+   khi `empty`, component **trả về trạng thái rỗng của nhà** (`TableEmpty` icon + chữ) ở đúng chiều cao
+   biểu đồ, thay vì `position:absolute; inset:0` phủ lên svg. Không vẽ trục, không overlay → hết đè,
+   và chiều cao giữ nguyên nên đổi kỳ không làm lưới thẻ nhảy.
+2. Cùng kỳ rỗng, legend "Tạo mới / Hoàn thành" ở đầu thẻ cũng **ẩn theo** (`points.some(...)`) — nó mô
+   tả hai đường không còn được vẽ.
+3. `transition: width` của Segmented: AntD cho cái thumb trượt **vừa interpolate `transform` vừa
+   `width`** (rule `.ant-segmented .ant-segmented-thumb-motion-appear-active`), nên mỗi lần đổi kỳ cả
+   control reflow. Override giữ `transform`, bỏ `width` ([index.css](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/index.css)).
+   Đo giữa animation: thumb `transitionProperty = transform`, `width` đã bằng **92px = khổ đích** trong
+   khi `x` còn ở 1242px (vị trí cũ) → trượt đúng, không co giãn.
+4. **Bắt được khi soi ảnh cùng kỳ**: donut "Cơ cấu trạng thái đơn" báo 185 đơn ngay cạnh biểu đồ "kỳ
+   này chưa có đơn". Nguyên nhân không phải lỗi số liệu: `GET /admin/stats` **không nhận tham số nào
+   cả** (`admin.controller.ts:55 overview()` — không query DTO), nên KPI + donut là **toàn bộ thời
+   gian**, còn biểu đồ + thẻ "Trong kỳ" lấy từ `/admin/orders?from=` và `/admin/kpis?from=` nên đúng là
+   theo kỳ. Thẻ donut nay nói rõ phạm vi của mình: `extra` = pill "Toàn bộ thời gian"; câu rỗng ở legend
+   donut (đã viết "Kỳ này chưa có đơn nào ở mọi trạng thái." ở §57) đổi thành "Chưa có đơn thuê nào ở
+   bất kỳ trạng thái nào."
+
+**Còn để ngỏ (đã đo, chưa sửa vì đổi ý nghĩa số liệu)**: thẻ KPI "Đơn thuê" vẽ **số lớn toàn bộ thời
+gian** (185) cạnh **sparkline theo kỳ** — hai con số trong cùng một thẻ không cùng phạm vi. Cách sửa
+sạch là cho `/admin/stats` nhận `from`/`to` (thay đổi hành vi API, cần người dùng duyệt) hoặc bỏ
+sparkline khỏi thẻ KPI tổng quan.
+
+**Kiểm chứng**: `probe-r14b.cjs` **12/12 PASS** — kỳ rỗng: không còn `text`/`line` nào trong svg thẻ
+(`texts=0 lines=0`), legend ẩn, pill phạm vi hiện; kỳ có dữ liệu: vẽ lại (`texts=12 lines=5`), legend
+hiện lại 2 mục; thumb `transform`-only và khớp khổ đích; rail vẫn `transition: none`; bản tối cũng bỏ
+trục; 375px@3x tràn ngang **0** và empty state nằm gọn trong viewport (mép phải 338/375). Tour cũ chạy
+lại sau khi đổi cấu trúc dashboard: **86 PASS / 0 FAIL**; scan a11y 34 trạng thái vẫn
+`contrast 0 / tiny 0 / anim 0 / ease 0` (12 contained). Cổng: `tsc -b` 0, oxlint 0 warning / 63 file,
+vitest **89**, `vite build` xanh; grep chunk dist thấy rule thumb `transition:transform` và chuỗi
+"Toàn bộ thời gian". Ảnh: `r14-empty-today.png`, `r14-empty-today-dark.png`, `r14-empty-today-375.png`,
+`r14-thumb-mid.png`.
+
+## 60. "7 ngày qua" vẽ to bất thường sau khi load page: viewBox đóng băng ở giá trị placeholder (R15)
+
+**Phản hồi**: người dùng gửi hai ảnh thẻ "Diễn biến đơn thuê" cùng kỳ **7 ngày qua**. Ảnh 1 (lỗi, "lâu
+lâu mới bị một lần"): nét đậm hơn, chữ trục **béo và ngang** hơn, nhãn 0/2/4/6/8 dạt sát mép trái trong
+khi vạch lưới bắt đầu sâu hơn. Ảnh 2 là dạng đúng.
+
+**Vì sao nhìn ảnh là ra bệnh**: svg vẽ bằng `viewBox="0 0 W 240"` + `preserveAspectRatio="none"`, nên
+**mọi thứ trong svg bị kéo ngang theo `box/W`**; chiều dọc giữ nguyên 240px. Ảnh 1 có mép phải và các
+nhãn ngày gần như không đổi nhưng **chữ và lề thì nở ra** → `W` nhỏ hơn bề rộng thật, không phải lỗi
+font. Con số khớp chính xác: `W = 760` (placeholder của `useState`) trong box **1046px** ở viewport
+1920 → tỉ lệ **1,376**.
+
+**Nguyên nhân** (chính là lỗi do vòng R14 gây ra): [charts.tsx](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/components/charts.tsx)
+đo bề rộng container bằng **`useLayoutEffect(..., [])`** — chạy đúng một lần lúc mount — trong khi R14
+thêm nhánh `if (empty) return <div …>` **không gắn ref**. Chuỗi sau làm `measured` đóng băng vĩnh viễn:
+
+1. load page → bấm **Hôm nay** khi request series đầu tiên chưa về → lần mount **đầu tiên** của
+   `TrendChart` rơi vào nhánh trống → `wrapRef.current === null` → **không đo, không observe**;
+2. bấm lại **7 ngày qua** → dữ liệu kỳ này **đã cache** nên không hiện skeleton → component **không
+   mount lại** → effect một-lần không chạy tiếp → vẽ `viewBox 760` trong box 1046px.
+
+Kỳ "Hôm nay" thật sự rỗng: `GET /admin/orders?from=<00:00+07 hôm nay>` trả `total = 0`, trong khi toàn
+bộ thời gian là 185 đơn.
+
+**Sửa**: thay effect mount-only bằng **callback ref** `attach` — phần tử nào được gắn vào DOM thì ngắt
+observer cũ, đọc `clientWidth` **ngay** (trước paint) và observe chính phần tử đó; `useEffect(() =>
+() => observer.current?.disconnect(), [])` dọn dẹp khi unmount; `onMove` dùng `event.currentTarget`
+thay vì đọc ref. Điều kiện cần: **phần tử được đo phải tồn tại ở cả hai nhánh render** (đã ghi vào
+DESIGN.md §5.5).
+
+**Control dương tính** — dựng lại nguyên văn code trước sửa (useLayoutEffect `[]` + `wrapRef`, nhánh
+trống không ref) rồi chạy đúng gesture *load → bấm Hôm nay → bấm 7 ngày qua*:
+
+| bản | `probe-r15i` (dev 5174) | `probe-r15j` (dist + `vite preview` 4178) |
+|---|---|---|
+| trước sửa | **6/6 STRETCHED** — 1440: `vbW 760 / boxW 726` = 0,955; 1920: `vbW 760 / boxW 1046` = **1,376** | **6/6 STRETCHED**, cùng cặp số (bấm được "Hôm nay" ở 182–291ms sau navigate) |
+| sau sửa | **6/6 `ratio = 1,000`** (726/726, 1046/1046) | **6/6 `ratio = 1,000`** |
+
+Kiểm chứng qua **artifact** (không chỉ qua dev server): build bản lỗi → probe → build bản sửa → probe,
+trên cùng một server preview; ảnh `shots/r15-fixed-card-1920.png` (thẻ chụp từ dist đã sửa,
+`vbW=1046 boxW=1046`) đặt cạnh `shots/r15-repro-1920-0.png` (dist bản lỗi). Probe phụ
+`probe-r15c.cjs` **4/4 PASS**: kỳ trống → đổi khổ cửa sổ → quay lại, viewBox vẫn khớp, cả hai chiều.
+
+**Vòng control hỏng trước khi có bảng trên, ghi lại để lần sau khỏi lặp**:
+- Control đầu tiên **xanh giả** vì chạy `node probe…` và `cp khôi phục` trong **cùng một lô song song**;
+  bản sửa đã được ghi đè lên file trước khi Chrome kịp tải trang. Control phải chạy **tuần tự**.
+- Control thứ hai ("cho `attach` chỉ nối observer một lần") **không tái hiện được** lỗi, vì đổi kỳ là
+  `TrendChart` **mount lại** (skeleton 240px xen giữa ở `DashboardPage.tsx:353`) → state `measured` reset
+  → nhánh nào cũng đo lại. Chỉ hình thái **mount-only effect + nhánh trống không ref** mới sinh bệnh.
+- Bộ đo "mọi frame" (MutationObserver + rAF, `probe-r15e/f/g`) báo `chartFrames = 0` **không phải** vì hết
+  lỗi: probe quên ghi `pt_admin_user`, nên Chrome nằm ở trang login và không có svg nào để soi. Một máy
+  đo phải tự chứng minh nó thấy được đối tượng (assert `chartFrames > 0`) trước khi được tin.
+
+**Kiểm chứng cuối vòng**: `tsc -b` 0 lỗi, oxlint **0 warning / 63 file**, vitest **89/89**, `vite build`
+xanh, scan a11y `{"contrast":0,"tiny":0,"anim":0,"soft":12,"ease":0}`. Tour `shoot-r9.cjs` **86 PASS /
+0 FAIL** ở 7 lượt liên tiếp; **một** lượt sớm hơn báo `TOUR FAILURES 2` nhưng tên hai assertion bị mất vì
+output bị pipe qua `tail` — chưa loại được flaky, cần giữ log đầy đủ khi chạy lại.
+
+## 61. Màn Đơn thuê: kicker "Vận hành", bảng áp sát viền card, và transition trên thuộc tính layout (R16)
+
+**Phản hồi**: `/orders` còn 1 AI tell (kicker "Vận hành" nằm trên h1 "Đơn thuê") và 2 quality issues
+(thẻ `div.ant-card.ant-card-bordered` có con áp sát border+bg trên/trái, không inset; `transition: height`
+cấp trang).
+
+**Đo trước khi sửa** (`probe-r16.cjs`, `/orders` @1440):
+- Kicker `.pt-page-overline` = "Vận hành", 11px, `letter-spacing 1.54px`, màu `rgb(91,81,216)`. Cùng màn,
+  **breadcrumb header đã in "Vận hành › Đơn thuê"** ([AdminLayout.tsx:167](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/app/AdminLayout.tsx#L167))
+  và **tiêu đề nhóm ở sider** cũng in "Vận hành" → một chữ xuất hiện ba lần, hai lần chỉ để trang trí.
+- `.ant-card-body` của thẻ bảng có `padding: 0px`; `ant-table-wrapper` so với card chỉ cách **top 1px /
+  left 1px** (đúng 1px viền). Đo 4 màn `/orders`, `/users`, `/money`, `/audit`: cùng số 1/1 → extension
+  gọi là "children flush against border+bg on top/left" là có thật.
+- Phần tử **đang thật sự** transition thuộc tính layout: **2 node** `th.ant-table-cell.ant-table-column-has-sorters`
+  với `transition: all 0.3s, left 0s` — `all` ôm trọn height/padding/width.
+
+**Sửa**:
+
+1. **Bỏ kicker** ([PageHeader.tsx](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/components/PageHeader.tsx)):
+   component thôi đọc `SECTION_META`/`sectionOf`, không còn in overline; rule `.pt-page-overline` xoá khỏi
+   CSS và `margin-top` của `.pt-page-title` từ `4px` → `0` (khoảng trống đó vốn để đẩy chữ khỏi kicker).
+   Kiểm tra không mất thông tin: với 5 route, `.pt-crumb-group` vẫn là "Vận hành"/"Quản trị"/"Bảng điều
+   hành" và nhóm menu vẫn đủ ["Vận hành","Kiểm duyệt","Quản trị"].
+2. **Lót lưới vào trong card** ([TableCard.tsx](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/components/TableCard.tsx)):
+   `styles={{ body: { padding: 0 } }}` → padding nằm trong CSS `.pt-table-card.ant-card > .ant-card-body`
+   = **12px 16px 16px**; bản ≤575px thu còn **10px 12px 12px** vì card điện thoại chỉ rộng 275px, 16px
+   mỗi bên sẽ ăn mất một cột. **Đưa padding từ inline style về CSS là bắt buộc**: inline thắng media query.
+   Số đo sau sửa: inset **top 12 / left 16 / right 16**; chữ cột đầu "NGƯỜI THUÊ" từ **17px → 33px** tính
+   từ viền card, trong khi hàng điều khiển phía trên ở 29px → lệch 4px (trước lệch 12px). Phân trang
+   `margin: 12px 16px` → `12px 0 0` vì body đã có 16px.
+3. **Cắt transition thuộc tính layout** ([index.css](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/index.css)):
+   - `th.ant-table-column-has-sorters`: `all` → chỉ `background-color, color` (đúng cái nó cần: fade khi hover);
+   - `.ant-select-multiple .ant-select-content .ant-select-selection-item`: `height, line-height, padding`
+     → `opacity`. Đây là tag nhiều chọn ở drawer "Thêm game" (Danh mục game) — mỗi lần chọn là cả toolbar
+     bị reflow theo chiều cao tag. Đo lại trên node thật sau override: `transitionProperty = opacity, 0.3s`.
+
+Vì sao override thắng AntD: AntD inject `<style>` lúc chạy nên **thứ tự nguồn không bảo đảm**, nên các rule
+trên tăng specificity (`.pt-content .ant-table-wrapper ...` = 4 class; `... .ant-select-selection-item.ant-select-selection-item`
+lặp một class).
+
+**Control của máy đo** — `scan-a11y.cjs` có thêm bộ đếm **`layRule`**: quét **CSSOM** (đúng cách extension
+đọc) mọi rule transition `width/height/margin/padding` mà selector **thật sự khớp node đang render**, thay
+vì chỉ nhìn computed style. Chuỗi control 3 bước (`probe-r16ctl.cjs`): baseline `/orders` = **4** rule
+(tất cả là `.ant-menu` nội bộ, đã bị khối rail `transition: none` vô hiệu ở computed) → tiêm
+`.pt-toolbar { transition: height 0.3s ease }` → **5** rule, bắt đúng 1 (`.pt-toolbar :: height`) → gỡ tiêm
+→ **4**. PASS.
+
+**Điểm tự sửa lại lời cũ**: bộ đếm `anim` ở §58/§59 loại `transition: all` với lý do "AntD khai all để
+đổi màu, không reflow" — đúng với nút, nhưng **sai** với header bảng có sort: `all 0.3s` ở đó animate cả
+height/padding. Vì vậy `anim: 0` hồi đó **không** chứng minh CSSOM sạch; nay `layRule` phủ cả hai cách đọc.
+
+**Còn để ngỏ (cần quyết định, chưa làm)**: 4 rule `.ant-menu` (width/padding/font-size/margin) vẫn nằm
+nguyên trong **text** của CSSOM, dù computed style của mọi node menu đã là `transition: none`. Nếu extension
+đọc text thay vì giá trị computed, nó vẫn có thể báo "transition: width/height" cấp trang. Cách duy nhất
+tắt hẳn là hạ token motion của Menu (`motionDurationSlow: '0s'` hoặc `motion: false`) — mất luôn fade khi
+hover menu, nên chờ bạn chọn.
+
+**Kiểm chứng cuối vòng**: `tsc -b` 0 lỗi, oxlint **0 warning / 63 file**, vitest **89/89**, `vite build`
+xanh; grep **artifact** `dist/assets/*.css` thấy cả 4 rule mới (`padding:12px 16px 16px`,
+`padding:10px 12px 12px`, header `transition:background-color...,color...`, tag `transition:opacity...`)
+và **không còn** chuỗi `pt-page-overline` trong CSS lẫn JS (control âm); scan a11y 16 route × 2 giao diện
+`{"contrast":0,"tiny":0,"anim":0,"soft":10,"layRule":134,"ease":0}` — `soft` giảm 12 → 10 vì hai header
+sort không còn `all, left`, `layRule` là con số CSSOM đã giải thích ở trên; tour `shoot-r9.cjs` **86 PASS /
+0 FAIL** (log đầy đủ `tour-r16.log`, `tour-r16b.log`). Ảnh: `r16-orders-before.png` / `r16-orders-after.png`
+(cùng kỳ, cùng khổ), `r16-orders-light.png`, `r16-audit-dark.png`, `r16-orders-375.png` (tràn ngang 0).
+
+## 62. Gạch dưới tab trên /money và /withdrawals animate `width` (R17)
+
+**Phản hồi**: extension Chrome còn một mục *Layout property animation* tại
+`div.ant-tabs-ink-bar.ant-tabs-ink-bar-animated`: `transition: width`, trên `/money` và `/withdrawals`.
+
+**Đo trước khi sửa** (`probe-r17.cjs`, 1440): ink bar có `position: absolute`, computed
+`transitionProperty = "width, left, right"` với `0.3s` cho cả ba; AntD ghi inline `width: 52.53px;
+left: 26.27px; transform: translateX(-50%)`. Ba màn thật sự có Tabs: `/money` (4 tab), `/withdrawals` (2),
+`/catalog` (2).
+
+**Đây là chỗ lời bào chữa cũ sai**: §58 xếp ink bar vào nhóm 12 mục "contained" với lý do *phần tử absolute
+thì không reflow hàng xóm*. Đúng về mặt hiệu năng, nhưng **thuộc tính được animate vẫn là thuộc tính
+layout**, và máy quét đọc chính cái đó. Nên lần này bỏ hẳn ngoại lệ thay vì giải thích tiếp.
+
+**Vì sao không giữ chuyển động bằng `transform`**: AntD định vị gạch bằng inline `left` + `width`
+(`transform` chỉ dùng `translateX(-50%)` để căn giữa, không đổi theo tab), nên override
+`transition: transform` sẽ không animate gì cả. Kiểm tra tín hiệu còn lại trước khi chấp nhận gạch đứng
+yên: **nhãn tab đang chọn đổi màu violet** `rgb(91,81,216)` trong khi tab không chọn là
+`rgba(0,0,0,0.88)` → gạch không phải tín hiệu duy nhất, mất trượt không mất ngữ nghĩa.
+
+**Sửa** ([index.css](file:///C:/Users/manhk/Documents/Projects/play-together/play-together-admin/src/index.css)):
+`transition: none` cho `.ant-tabs .ant-tabs-nav .ant-tabs-ink-bar.ant-tabs-ink-bar-animated` — bốn class
+để thắng rule của AntD (ba class, inject lúc chạy nên không thể dựa thứ tự nguồn).
+
+**Kiểm chứng** (`probe-r17ink.cjs`, **9/9 PASS**): duyệt **từng tab** trên cả ba màn, so rect của gạch với
+rect của tab đang chọn → `barCenterOffset = 0`, `widthDelta = 0`, `visible = true`, `dur = 0s` ở cả 8 tab;
+switch sang "Giữ hộ" trên `/money` đổi bảng thật (header `|Loại|Chiều|Tài khoản|…` →
+`Người thuê|Người chơi|Đơn|…`). Ảnh `r17-money-tabs.png` (trước) và `r17-money-tabs-after.png` (sau).
+Scan a11y sau sửa: `{"contrast":0,"tiny":0,"anim":0,"soft":4,"ease":0}` — **soft 10 → 4**, đúng 6 mục
+ink bar (3 màn × 2 giao diện) biến mất; 4 mục còn lại là `div.ant-steps-item-icon` ở màn chi tiết đơn,
+transition `background-color, border, color, inset, transform` — `inset` không đổi giá trị trong thực tế nên
+để lại, đã ghi rõ để vòng sau không phải đoán.
+Cổng: `tsc -b` 0, oxlint 0 warning / 63 file, vitest **89/89**, `vite build` xanh, tour `shoot-r9.cjs`
+**86 PASS / 0 FAIL** (`tour-r17.log`), grep artifact thấy
+chuỗi `ant-tabs-ink-bar.ant-tabs-ink-bar-animated{transition:none}` trong chunk CSS.
+
+**Rule đã cập nhật**: DESIGN.md §5.7 viết lại — *không animate thuộc tính layout, kể cả trên phần tử
+absolute*; indicator cần trượt thì dùng `transform`, không làm được thì đứng yên.
