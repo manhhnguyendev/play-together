@@ -4203,3 +4203,50 @@ API healthy after 2 attempt(s)
 (cùng step đó ở run hỏng in ra 30 dòng `curl: (7) Could not connect` rồi `API did not become healthy in
 time`). Hai run FE `42490842981` và admin `42490846641` vẫn `success`, nên phần code app của đợt push này
 không liên quan tới hỏng hóc.
+
+## 64. Một cache key, một shape: ô "đang chờ về ví" mở ra màn "Không có khoản nào chờ" (R19)
+
+**Triệu chứng** (người dùng báo, tái hiện bằng probe trên Expo web, tài khoản `demo.player2` có đúng một
+khoản chờ): ô ở dashboard in `108.000 đ đang chờ về ví · 1 phiên`, bấm vào là màn `/unactive-balance`
+nội dung
+
+```
+Tiền đang chờ về ví | Không có khoản nào chờ | Tiền của các đơn đã hoàn thành sẽ xuất hiện ở đây trước khi về số dư khả dụng.
+```
+
+Không có lỗi nào trong console (`=== errors (0)`), vì app không crash — nó chỉ tin vào dữ liệu rỗng.
+
+**Nguyên nhân**: hai nơi dùng chung `queryKeys.unActiveBalances = ['users','un-active-balances']` nhưng
+cache hai shape khác nhau. `PlayerDashboard.tsx:51-54` lưu mảng đã bóc (`(await ...).content`), còn
+`unactive-balance.tsx:29-34` lưu nguyên envelope rồi đọc `data?.content`. React Query không phân biệt
+được: key giống nhau, value khác nhau. Màn nào mount trước thì ghi kết quả của nó, màn sau đọc lại
+`.content` trên một mảng → `undefined` → `balances = []` → EmptyState phủ định đúng con số người dùng
+vừa bấm. Chiều ngược còn nặng hơn: dashboard làm `pending.reduce(...)` trên envelope → `TypeError`.
+Envelope đó do `legacyArray()` (mappers.ts:83-95) sinh ra khi service adapter bọc lại `/wallet`.
+
+Quét cả app bằng chính bộ quét đó tìm thêm hai điểm cùng loại:
+- `queryKeys.allGames`: 4 màn cache mảng, riêng `onboarding/take-categories.tsx:44-49` cache envelope
+  và đọc `data?.content`. Đi onboarding xong mở "Game yêu thích" trong cùng phiên là nhận phải giá trị
+  sai shape (`games` là object, `.map`/`.filter` gãy ngay).
+- `queryKeys.ratings(userId, vote, pageSize)`: màn `ratings/[userId].tsx` giữ envelope, dashboard bóc
+  mảng. Chưa va chạm vì dashboard dùng `pageSize=3` còn màn kia bước 10, nhưng đây là mìn: đổi số 3
+  thành 10 là hai bên đọc value của nhau.
+
+**Sửa** — một key một shape, không đổi API:
+- `unactive-balance.tsx`: `queryFn` bóc `.content`, màn đọc `data ?? []` (giống dashboard và giống
+  convention của `statistic`, `playerWork.requests`).
+- `onboarding/take-categories.tsx`: cùng chiều bóc `.content`.
+- `PlayerDashboard.tsx:76-80, 87`: phần đánh giá dùng envelope đúng như màn `ratings` vẫn cache.
+- Cổng mới `src/lib/__tests__/queryKeyShapes.spec.ts`: đọc toàn bộ `src`, với mỗi key có ≥2 nơi dùng thì
+  các `queryFn` phải cùng shape. Nó tự kiểm mình: `scannedBlocks === declaredCalls` và không block nào
+  bị bỏ qua, để cảm biến không âm thầm thành vô dụng khi cú pháp parse kém đi.
+
+**Kiểm chứng**:
+- Render thật (probe `probe-r19-shape.cjs`, 390×844 @2x, đăng nhập bằng form thật): 5/5 — tile mở đúng
+  `/unactive-balance`, màn **không** còn là EmptyState, có dòng `Tổng đang chờ: 108.000 đ`, và con số
+  của ô tile khớp từng ký tự với tổng của màn (`tile="108.000đ" screen="108.000đ"`), 0 lỗi runtime.
+  Ảnh: `shots/r19-pass1-unactive.png` (card `+ 108.000 đ`, pill "Chưa xử lý", "Về ví từ 03:51 11/11/2026").
+- Control âm: revert tạm hai file về shape cũ → cổng jest FAIL, liệt kê đúng hai conflict
+  `queryKeys.unActiveBalances` và `queryKeys.allGames`; restore → PASS. Lần chạy đầu của chính cổng này
+  từng FAIL-KHÔNG-PHÁT-HIỆN (parse cắt nhầm ở `() =>`), và control là thứ bắt nó quay lại.
+- Gate: `npx tsc --noEmit` sạch, `npx expo lint` sạch, `npx jest` 13 suites / 97 tests xanh.
